@@ -1,0 +1,42 @@
+# Helper pod for staging this repo onto the data PVC at /data/src/dreamzero-wam, which the training
+# pods run from. Mounts the data PVC and just sleeps; stream the repo in with `kubectl exec ... tar`:
+#
+#   kubectl -n dreamzero apply -f infra/stager.yaml
+#   tar czf - --exclude .git --exclude __pycache__ -C <repo-parent> dreamzero-wam \
+#     | kubectl -n dreamzero exec -i wam-stager -- sh -c 'rm -rf /data/src/dreamzero-wam && tar xzf - -C /data/src'
+#
+# It runs on a CPU node (no GPU needed). Delete it when done: kubectl -n dreamzero delete pod wam-stager
+apiVersion: v1
+kind: Pod
+metadata:
+  name: wam-stager
+  namespace: dreamzero
+  labels:
+    app.kubernetes.io/part-of: dreamzero
+spec:
+  restartPolicy: Never
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - {key: nvidia.com/gpu.product, operator: DoesNotExist}   # CPU-only node
+              - {key: kubernetes.io/arch, operator: In, values: [amd64]}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: stager
+      image: busybox:1.36
+      command: ["/bin/sh", "-c", "mkdir -p /data/src && sleep 86400"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: false
+        capabilities: {drop: ["ALL"]}
+      volumeMounts:
+        - {name: data, mountPath: /data}
+  volumes:
+    - {name: data, persistentVolumeClaim: {claimName: dreamzero-data}}

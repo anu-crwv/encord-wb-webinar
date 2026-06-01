@@ -1,0 +1,58 @@
+# Builds the pick-place DROID subsample and registers it as a W&B dataset artifact.
+# Runs on a CPU node (no GPU requested; nodeAffinity avoids the GPU boxes).
+#
+# Prereq: stage the bootstrap scripts as a configmap (re-run after editing the scripts):
+#   kubectl -n dreamzero create configmap wam-bootstrap-scripts \
+#     --from-file=build_pickplace_subset.py=wam/artifacts/build_pickplace_subset.py \
+#     --from-file=bootstrap_models.py=wam/artifacts/bootstrap_models.py \
+#     -o yaml --dry-run=client | kubectl apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wam-pickplace-subset
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-data"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-data"}
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: nvidia.com/gpu.product, operator: DoesNotExist}   # CPU-only nodes
+                  - {key: kubernetes.io/arch, operator: In, values: [amd64]}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: build
+          image: python:3.12-slim
+          command: ["/bin/bash", "-exo", "pipefail", "-c"]
+          args:
+            - |
+              # amd64-only HOME, kept separate from the arm64 training jobs' site-packages
+              export HOME=/data/.home-amd64 PIP_CACHE_DIR=/data/.home-amd64/.pip TMPDIR=/data/.home-amd64/.tmp
+              export HF_HOME=/data/.hf WANDB_DIR=/data/.home-amd64/.wandb
+              mkdir -p $HOME $PIP_CACHE_DIR $TMPDIR $HF_HOME $WANDB_DIR
+              python -m pip install --no-cache-dir --quiet "huggingface_hub" "wandb>=0.18.0" pyarrow
+              python /scripts/build_pickplace_subset.py --n "${SUBSET_N:-150}"
+          envFrom: [{secretRef: {name: wandb-api-key}}]
+          env:
+            - {name: WANDB_ENTITY,  value: encord-wb-physical-ai}
+            - {name: WANDB_PROJECT, value: wam-finetune-webinar}
+            - {name: WAM_DATA_ROOT, value: /data/wam}
+            - {name: SUBSET_N,      value: "150"}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+          resources:
+            requests: {cpu: "4", memory: 16Gi}
+            limits:   {cpu: "8", memory: 32Gi}
+          volumeMounts:
+            - {name: data,    mountPath: /data}
+            - {name: scripts, mountPath: /scripts}
+      volumes:
+        - {name: data,    persistentVolumeClaim: {claimName: dreamzero-data}}
+        - {name: scripts, configMap: {name: wam-bootstrap-scripts}}
