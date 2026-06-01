@@ -1,0 +1,115 @@
+# DreamZero DROID pick-place fine-tune — MULTI-NODE (2x GH200, arm64), W&B shared-mode run,
+# artifact-driven, DeepSpeed ZeRO-3 (shards the 14B model across the 2 GPUs so it fits).
+#
+# Topology: an Indexed Job runs 2 pods (one per GH200 node via pod anti-affinity). k8s injects
+# JOB_COMPLETION_INDEX (0/1) -> NODE_RANK. A headless Service gives rank0 a stable DNS name
+# (<job>-0.wam-train-svc) used as torchrun's master. rank0 owns the shared W&B run (lineage +
+# dataset stage + checkpoint); rank1 waits on a PVC ready-flag. wam/train.py orchestrates both.
+#
+# Consumes (input lineage): encord-wb-webinar/wandb-registry-model/{wan2-1-i2v-14b-480p,umt5-xxl,
+#   dreamzero-agibot}:v0  +  .../wandb-registry-dataset/droid-pickplace:latest
+# Produces: fine-tuned checkpoint artifact linked to wandb-registry-model.
+#
+# Prereq: repo staged on the data PVC at /data/src/dreamzero-wam; wandb-api-key secret present.
+# WANDB_RUN_ID must be unique per launch and identical across both pods (inject at apply time).
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wam-train-svc
+  namespace: dreamzero
+spec:
+  clusterIP: None                      # headless: DNS resolves to pod IPs for torchrun rendezvous
+  publishNotReadyAddresses: true
+  selector: {app: wam-train}
+  ports:
+    - {name: torchrun, port: 29500, targetPort: 29500}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wam-droid-pickplace-train
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-train"}
+spec:
+  completionMode: Indexed
+  completions: 2
+  parallelism: 2
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 259200
+  template:
+    metadata:
+      labels: {app: wam-train, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-train"}
+    spec:
+      restartPolicy: Never
+      subdomain: wam-train-svc          # -> pod DNS <job>-<index>.wam-train-svc.dreamzero.svc
+      nodeSelector:
+        kubernetes.io/arch: arm64
+        nvidia.com/gpu.product: NVIDIA-GH200-480GB
+      tolerations:
+        - {key: is_gpu, value: "true", operator: Equal, effect: PreferNoSchedule}
+      affinity:
+        podAntiAffinity:               # spread the 2 pods across the 2 GH200 nodes
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector: {matchExpressions: [{key: app, operator: In, values: [wam-train]}]}
+              topologyKey: kubernetes.io/hostname
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: train
+          image: nvcr.io/nvidia/pytorch:25.04-py3
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-exo", "pipefail", "-c"]
+          args:
+            - |
+              IDX=${JOB_COMPLETION_INDEX:-0}
+              export HOME=/data/.home-gh200-$IDX PIP_CACHE_DIR=/data/.home-gh200-$IDX/.pip
+              export TMPDIR=/data/.home-gh200-$IDX/.tmp HF_HOME=/data/.hf
+              mkdir -p $HOME $PIP_CACHE_DIR $TMPDIR $HF_HOME
+              export WAM_REPO_ROOT=/data/src/dreamzero-wam
+              export PYTHONPATH=$WAM_REPO_ROOT:${PYTHONPATH:-}
+              export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+              export NODE_RANK=$IDX NNODES=2 NUM_GPUS=1 MASTER_PORT=29500
+              export MASTER_ADDR="${JOB_NAME}-0.wam-train-svc.dreamzero.svc.cluster.local"
+              # NCCL cross-node networking. GH200 pods here have a single interface (eth0) and no IB,
+              # so pin eth0, disable IB, and force a consistent protocol/algo across ranks — long runs
+              # otherwise hit "NET/Socket message truncated" (NCCL_PROTO/NCCL_ALGO mismatch) -> a
+              # ZeRO-3 all-gather hangs -> 30-min watchdog timeout. Verify with `ip -o -4 addr` if it recurs.
+              export NCCL_SOCKET_IFNAME=eth0 NCCL_IB_DISABLE=1 NCCL_PROTO=simple NCCL_ALGO=Ring
+              export NCCL_DEBUG=WARN
+              export TORCH_NCCL_BLOCKING_WAIT=1 TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+              export TRITON_CACHE_DIR=$TMPDIR/triton; mkdir -p $TRITON_CACHE_DIR
+              cd $WAM_REPO_ROOT
+              python -m pip install --no-cache-dir --quiet --user -r requirements-train.txt
+              # Disable DeepSpeed's nvtx instrumentation: the nvcr image's nvtx python lacks the
+              # Domain.push_range API pip-DeepSpeed expects, which otherwise aborts the first forward.
+              DS_NVTX=$(find $HOME/.local/lib -path '*/deepspeed/utils/nvtx.py' 2>/dev/null | head -1)
+              if [ -n "$DS_NVTX" ]; then sed -i 's/^enable_nvtx = True/enable_nvtx = False/' "$DS_NVTX"; echo "patched $DS_NVTX (enable_nvtx=False)"; fi
+              echo "node_rank=$NODE_RANK master=$MASTER_ADDR run_id=$WANDB_RUN_ID"
+              bash scripts/train/droid_pickplace.sh
+          envFrom: [{secretRef: {name: wandb-api-key}}]
+          env:
+            - {name: WANDB_ENTITY,   value: encord-wb-physical-ai}
+            - {name: WANDB_PROJECT,  value: wam-finetune-webinar}
+            - {name: WAM_REGISTRY_ORG, value: encord-wb-webinar}
+            - {name: WANDB_RUN_ID,   value: "WAMRUNIDPLACEHOLDER"}   # inject unique value at apply
+            - {name: MAX_STEPS,      value: "300"}
+            - {name: SAVE_STEPS,     value: "100"}
+            - {name: TRAIN_ARCHITECTURE, value: "lora"}
+            - {name: PER_DEVICE_BATCH_SIZE, value: "1"}
+            - {name: DEEPSPEED,      value: "groot/vla/configs/deepspeed/zero3.json"}
+            - {name: USE_AGIBOT_INIT, value: "0"}   # 1 = new-embodiment transfer init
+            - {name: JOB_NAME, valueFrom: {fieldRef: {fieldPath: "metadata.labels['batch.kubernetes.io/job-name']"}}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+          ports:
+            - {containerPort: 29500, name: torchrun}
+          resources:
+            requests: {cpu: "16", memory: 128Gi, nvidia.com/gpu: "1"}
+            limits:   {cpu: "48", memory: 400Gi, nvidia.com/gpu: "1"}
+          volumeMounts:
+            - {name: data,        mountPath: /data}
+            - {name: checkpoints, mountPath: /checkpoints}
+            - {name: dshm,        mountPath: /dev/shm}
+      volumes:
+        - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+        - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}
+        - {name: dshm,        emptyDir: {medium: Memory, sizeLimit: 64Gi}}
