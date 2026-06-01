@@ -1,0 +1,31 @@
+# Additive training deps on top of the nvcr.io/nvidia/pytorch image (which already ships
+# torch/torchvision/numpy/scipy/pandas/cv2 built for the GPU arch). We pin ONLY the three
+# API-critical libraries the upstream code targets; everything else is left unpinned so pip
+# does not fight the image's preinstalled stack (numpy/scipy/etc.).
+hydra-core
+omegaconf
+transformers==4.51.3
+diffusers==0.30.2
+peft==0.5.0
+accelerate
+deepspeed
+einops
+albumentations
+decord2
+av
+imageio
+imageio-ffmpeg
+ftfy
+sentencepiece
+loguru
+termcolor
+wandb>=0.18.0
+huggingface_hub
+# unguarded import-time deps pulled in by groot/vla/common + transforms (not in the base image)
+h5py
+pydantic
+dm_tree
+kornia
+blessings
+flufl.lock
+typing_extensions

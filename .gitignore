@@ -1,0 +1,24 @@
+# secrets — never commit
+CWKubeconfig_*
+*.kubeconfig
+.env
+.env.*
+*.pem
+*.key
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+# large local artifacts (live on cluster PVC / W&B). Anchored to the repo root with a leading slash
+# so they do NOT match source dirs like groot/vla/data/ (the dataset loader package must be committed).
+/checkpoints/
+/data/
+wandb/
+*.mp4
+# os/editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
