@@ -1,0 +1,79 @@
+# DreamZero DROID pick-place fine-tune — SINGLE GH200 (arm64), DeepSpeed ZeRO-3 + CPU offload.
+#
+# Why single-node: the multi-node path dies on intermittent NCCL all-gather stalls over the GH200
+# pods' plain-TCP fabric (no RDMA/IB). Running on ONE GH200 and offloading the 14B params to its
+# Grace 480GB host (NVLink-C2C) removes cross-node NCCL entirely — the model still fits because the
+# params live on the host and stream to the GPU per layer. Slower per step than a healthy multi-node
+# run, but reliable. (For high-perf multi-node, see droid-pickplace-train.yaml + RDMA setup.)
+#
+# Same artifact-driven flow as the multi-node job: wam/train.py opens one W&B run, use_artifact's the
+# 4 Registry artifacts (input lineage), trains, logs the checkpoint artifact (output lineage).
+#
+# Prereq: repo staged on the data PVC at /data/src/dreamzero-wam; wandb-api-key secret present.
+# Inject a unique WANDB_RUN_ID at apply time (sed WAMRUNIDPLACEHOLDER).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wam-droid-pickplace-train-single
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-train"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 259200
+  template:
+    metadata:
+      labels: {app: wam-train, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-train"}
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/arch: arm64
+        nvidia.com/gpu.product: NVIDIA-GH200-480GB
+      tolerations:
+        - {key: is_gpu, value: "true", operator: Equal, effect: PreferNoSchedule}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: train
+          image: nvcr.io/nvidia/pytorch:25.04-py3
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-exo", "pipefail", "-c"]
+          args:
+            - |
+              export HOME=/data/.home-gh200-0 PIP_CACHE_DIR=/data/.home-gh200-0/.pip
+              export TMPDIR=/data/.home-gh200-0/.tmp HF_HOME=/data/.hf
+              mkdir -p $HOME $PIP_CACHE_DIR $TMPDIR $HF_HOME
+              export WAM_REPO_ROOT=/data/src/dreamzero-wam
+              export PYTHONPATH=$WAM_REPO_ROOT:${PYTHONPATH:-}
+              export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+              export NNODES=1 NUM_GPUS=1
+              export TRITON_CACHE_DIR=$TMPDIR/triton; mkdir -p $TRITON_CACHE_DIR
+              cd $WAM_REPO_ROOT
+              python -m pip install --no-cache-dir --quiet --user -r requirements-train.txt
+              # Disable DeepSpeed nvtx (nvcr image's nvtx lacks the API pip-DeepSpeed calls).
+              DS_NVTX=$(find $HOME/.local/lib -path '*/deepspeed/utils/nvtx.py' 2>/dev/null | head -1)
+              if [ -n "$DS_NVTX" ]; then sed -i 's/^enable_nvtx = True/enable_nvtx = False/' "$DS_NVTX"; echo "patched $DS_NVTX (enable_nvtx=False)"; fi
+              echo "single-node run_id=$WANDB_RUN_ID deepspeed=$DEEPSPEED"
+              bash scripts/train/droid_pickplace.sh
+          envFrom: [{secretRef: {name: wandb-api-key}}]
+          env:
+            - {name: WANDB_ENTITY,   value: encord-wb-physical-ai}
+            - {name: WANDB_PROJECT,  value: wam-finetune-webinar}
+            - {name: WAM_REGISTRY_ORG, value: encord-wb-webinar}
+            - {name: WANDB_RUN_ID,   value: "WAMRUNIDPLACEHOLDER"}   # inject unique value at apply
+            - {name: MAX_STEPS,      value: "300"}
+            - {name: SAVE_STEPS,     value: "100"}
+            - {name: TRAIN_ARCHITECTURE, value: "lora"}
+            - {name: PER_DEVICE_BATCH_SIZE, value: "1"}
+            - {name: DEEPSPEED,      value: "configs/deepspeed/zero3_offload.json"}
+            - {name: USE_AGIBOT_INIT, value: "0"}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+          resources:
+            requests: {cpu: "16", memory: 200Gi, nvidia.com/gpu: "1"}
+            limits:   {cpu: "64", memory: 460Gi, nvidia.com/gpu: "1"}   # room for CPU param offload on the Grace host
+          volumeMounts:
+            - {name: data,        mountPath: /data}
+            - {name: checkpoints, mountPath: /checkpoints}
+            - {name: dshm,        mountPath: /dev/shm}
+      volumes:
+        - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+        - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}
+        - {name: dshm,        emptyDir: {medium: Memory, sizeLimit: 64Gi}}

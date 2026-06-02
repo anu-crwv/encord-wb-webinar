@@ -116,22 +116,28 @@ Registry. Default: 150 episodes (`SUBSET_N`).
 This is the variant you change for the curation experiment — see
 [Adding a dataset variant](#adding-a-dataset-variant-curation-experiment).
 
-### Step 3 — Run training  ·  [`train/droid-pickplace-train.yaml`](deploy/cks/train/droid-pickplace-train.yaml)
-Multi-node fine-tune across **both GH200s** with DeepSpeed ZeRO-3 (the 14B model doesn't fit one 96GB GPU,
-so ZeRO-3 shards it across the two). [`wam/train.py`](wam/train.py) opens one W&B run, `use_artifact`s the
-4 Registry artifacts (input lineage), runs the upstream trainer, and logs the fine-tuned checkpoint
-artifact (output lineage).
+### Step 3 — Run training
+[`wam/train.py`](wam/train.py) opens one W&B run, `use_artifact`s the 4 Registry artifacts (input
+lineage), runs the upstream trainer, and logs the fine-tuned checkpoint artifact (output lineage). The
+14B model doesn't fit one 96GB GH200 at full precision, so DeepSpeed ZeRO-3 is used either way. **Two
+manifests:**
+
+- **`train/droid-pickplace-train-single.yaml`** — ✅ **validated / recommended.** Single GH200, ZeRO-3
+  with **CPU param offload** to the Grace 480GB host (NVLink-C2C). A full 300-step LoRA run completes in
+  **~45 min at ~9 s/step**. No cross-node networking.
+- **`train/droid-pickplace-train.yaml`** — multi-node across both GH200s (Indexed 2-pod Job + headless
+  Service). Faster in theory but currently unreliable on this cluster's plain-TCP fabric (see
+  [known issue](#how-the-gh200-fit--zero-3-works-and-known-issues)); use only after RDMA is set up.
 
 ```bash
 # Stage this repo onto the data PVC (the training pods run from /data/src/dreamzero-wam).
-# Easiest: a helper pod that mounts the PVC, then stream the repo in (excluding .git/caches):
 kubectl -n dreamzero apply -f infra/stager.yaml          # a sleep pod mounting dreamzero-data
 tar czf - --exclude .git --exclude __pycache__ -C .. dreamzero-wam \
   | kubectl -n dreamzero exec -i wam-stager -- sh -c 'rm -rf /data/src/dreamzero-wam && tar xzf - -C /data/src'
 
-# Launch — WANDB_RUN_ID must be unique per launch and identical across both pods, so inject it at apply:
-RID="wamsmoke$(date +%m%d%H%M)"
-sed "s/WAMRUNIDPLACEHOLDER/$RID/" train/droid-pickplace-train.yaml | kubectl apply -f -
+# Launch the validated single-GH200 run. WANDB_RUN_ID must be unique per launch — inject at apply:
+RID="wamrun$(date +%m%d%H%M)"
+sed "s/WAMRUNIDPLACEHOLDER/$RID/" train/droid-pickplace-train-single.yaml | kubectl apply -f -
 
 # Watch
 kubectl -n dreamzero get pods -l app=wam-train
@@ -141,9 +147,9 @@ kubectl -n dreamzero logs -l app=wam-train --prefix -f | grep -vE "DEPRECATION|n
 The run appears at `https://wandb.ai/encord-wb-physical-ai/wam-finetune-webinar`. On success it logs
 `dreamzero-droid-pickplace-lora` and links it to the `model` Registry.
 
-> **Smoke vs full run.** Defaults are a LoRA smoke (`MAX_STEPS=300`). At ~48 s/step on 2× GH200 (ZeRO-3
-> cross-node param gather dominates) a 300-step run is ~3–4 h. For a fast wiring check set `MAX_STEPS=2`.
-> Scale up via the env knobs below.
+> **Smoke vs full run.** Defaults are a LoRA run of `MAX_STEPS=300` (~45 min single-GH200). For a fast
+> wiring check set `MAX_STEPS=2`. `save_only_model=true` keeps each checkpoint to ~39 MB (the LoRA
+> adapter); the optimizer state is not saved (no resume needed for a fine-tune). Scale via the env knobs below.
 
 ---
 
@@ -188,7 +194,7 @@ Set on the training Job (see the manifest `env:` block). All have sensible defau
 | `SAVE_STEPS` | `100` | checkpoint interval |
 | `TRAIN_ARCHITECTURE` | `lora` | `lora` or `full` |
 | `PER_DEVICE_BATCH_SIZE` | `1` | per-GPU batch |
-| `DEEPSPEED` | `…/deepspeed/zero3.json` (multi-node) | DeepSpeed config; empty = no DeepSpeed |
+| `DEEPSPEED` | `configs/deepspeed/zero3_offload.json` (single-GH200 manifest) | DeepSpeed config; empty = no DeepSpeed |
 | `MODEL_DTYPE` | `bfloat16` | resident model dtype |
 | `USE_AGIBOT_INIT` | `0` | `1` = initialize the policy from DreamZero-AgiBot (new-embodiment transfer; needs >96GB / more GPUs) |
 | `SUBSET_N` (step 2) | `150` | episodes in the dataset subset |
@@ -213,7 +219,8 @@ dreamzero-wam/
 ├── deploy/cks/
 │   ├── infra/                  # wandb-secret-setup.md, stager pod, PVC notes
 │   ├── bootstrap/              # 00-models-download.yaml, 01-pickplace-subset.yaml  (CPU nodes)
-│   └── train/droid-pickplace-train.yaml                                            (2× GH200)
+│   └── train/                  # droid-pickplace-train-single.yaml (1× GH200, validated) + ...-train.yaml (2× GH200)
+├── configs/deepspeed/          # zero3_offload.json (single-GH200 CPU offload) — kept out of groot/
 ├── docs/                       # upstream DROID/embodiment/backbone guides
 ├── eval/                       # placeholder — see "Evaluation"
 └── requirements-train.txt      # additive training deps on top of the nvcr pytorch image
@@ -221,12 +228,14 @@ dreamzero-wam/
 
 ---
 
-## How the GH200 fit / multi-node works (and known issues)
+## How the GH200 fit / ZeRO-3 works (and known issues)
 
-The 14B video-diffusion model + the ~29k-token (33-frame) sequence does **not** fit a single 96GB GH200,
-so training shards the model across the two GH200 nodes with DeepSpeed ZeRO-3. Making the upstream model
-work under ZeRO-3 needed a few **non-architectural** shims (all in `wam/_ds_*`, applied via the launch
-shim — `groot/` stays verbatim):
+The 14B video-diffusion model + the ~29k-token (33-frame) sequence does **not** fit a single 96GB GH200
+at full precision, so DeepSpeed ZeRO-3 is used. The **validated** configuration is **single GH200 with
+ZeRO-3 CPU param offload** ([`configs/deepspeed/zero3_offload.json`](configs/deepspeed/zero3_offload.json)):
+the params live on the Grace 480GB host and stream to the GPU over NVLink-C2C — a full 300-step LoRA run
+completes in ~45 min at ~9 s/step. Making the upstream model work under ZeRO-3 needed a few
+**non-architectural** shims (all in `wam/_ds_*`, applied via the launch shim — `groot/` stays verbatim):
 
 - **nvtx**: the nvcr image's `nvtx` lacks the API pip-DeepSpeed calls → disabled in the boot script.
 - **VAE / encoders**: marked as ZeRO-3 *leaf modules* (their `isinstance`-driven conv-cache breaks if
@@ -235,12 +244,15 @@ shim — `groot/` stays verbatim):
   checkpoint, wrapped in `autocast(bf16)`.
 - **W&B run handoff**: the launcher finishes the run so the trainer can resume it for metrics, then
   reopens it to log the checkpoint.
+- **`save_only_model=true`**: under ZeRO-3 the offloaded optimizer state is a single ~36GB `torch.save`
+  that fails on the VAST PVC; a fine-tune doesn't need it, so only the ~39MB LoRA checkpoint is saved.
 
-**Known issue — long multi-node runs can hit a NCCL cross-node socket error** (`NET/Socket message
-truncated` → a ZeRO-3 all-gather hangs → 30-min watchdog timeout). The 2-step run is reliable; a long run
-exposed it. The manifest pins the NCCL interface and disables IB fallback to mitigate; if it recurs,
-verify the pod interface with `ip -o -4 addr` and adjust `NCCL_SOCKET_IFNAME`. CoreWeave RDMA/IB tuning is
-the longer-term fix.
+**Known issue — multi-node runs hit an NCCL stall on this cluster.** `train/droid-pickplace-train.yaml`
+(2× GH200) gets `NET/Socket message truncated` (mitigated by `NCCL_PROTO=simple` etc.) and then an
+intermittent ZeRO-3 all-gather hang → 30-min watchdog timeout, because the GH200 pods have **no
+RDMA/InfiniBand** (NCCL falls back to plain TCP over `eth0`). The single-GH200 offload path above avoids
+cross-node NCCL entirely and is what we run. To make multi-node reliable, the fix is RDMA/IB: request the
+CoreWeave RDMA NICs into the pods (+ IMEX + NCCL IB env), not TCP-socket tuning.
 
 ---
 
