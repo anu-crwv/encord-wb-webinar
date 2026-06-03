@@ -180,6 +180,7 @@ def update_items(
     dry_run: bool,
     page_size: int,
     bundle_size: int,
+    progress_interval: int,
 ) -> dict[str, Any]:
     exact, basename = registration_lookup(records)
     report: dict[str, Any] = {
@@ -199,6 +200,22 @@ def update_items(
     bundle = Bundle(bundle_size=bundle_size)
     pending = 0
     pending_items: list[dict[str, str]] = []
+
+    def echo_progress(force: bool = False) -> None:
+        listed = report["listed_items"]
+        if not listed:
+            return
+        if not force and (progress_interval <= 0 or listed % progress_interval != 0):
+            return
+        matched = report["matched_exact"] + report["matched_basename"]
+        changed = report["would_update"] if dry_run else report["updated"] + pending
+        action = "would_update" if dry_run else "updated_or_queued"
+        typer.echo(
+            f"Progress: listed={listed:,} matched={matched:,} {action}={changed:,} "
+            f"skipped={report['skipped_current']:,} missing={len(report['missing_registration']):,} "
+            f"ambiguous={len(report['ambiguous']):,} errors={len(report['errors']):,}",
+            err=True,
+        )
 
     def flush() -> None:
         nonlocal bundle, pending, pending_items
@@ -227,6 +244,7 @@ def update_items(
                 report["ambiguous"].append(detail)
             else:
                 report["missing_registration"].append(detail)
+            echo_progress()
             continue
 
         if match_type == "exact":
@@ -237,10 +255,12 @@ def update_items(
         existing = item.client_metadata or {}
         if metadata_is_current(existing, record.client_metadata):
             report["skipped_current"] += 1
+            echo_progress()
             continue
 
         if dry_run:
             report["would_update"] += 1
+            echo_progress()
             continue
 
         try:
@@ -252,7 +272,10 @@ def update_items(
         except Exception as exc:
             report["errors"].append({"item_uuid": str(item.uuid), "name": item.name, "error": str(exc)})
 
+        echo_progress()
+
     flush()
+    echo_progress(force=True)
     return report
 
 
@@ -269,7 +292,7 @@ def main(
     folder_hash: Annotated[
         str,
         typer.Option("--folder-hash", help="Cloud Synced Folder hash to update."),
-    ] = "",
+    ] = "cdb6587a-d00b-4446-a3a9-16d2b8babbda",
     report_json: Annotated[
         Path | None,
         typer.Option("--report-json", help="Path for update report JSON."),
@@ -286,6 +309,10 @@ def main(
         int,
         typer.Option("--bundle-size", help="Number of item metadata patches per bundled API call."),
     ] = 1000,
+    progress_interval: Annotated[
+        int,
+        typer.Option("--progress-interval", help="Print progress every N listed items. Use 0 to disable."),
+    ] = 2000,
 ) -> None:
     if not folder_hash:
         raise typer.BadParameter("Pass --folder-hash for the Cloud Synced Folder to update.")
@@ -296,7 +323,14 @@ def main(
 
     client = get_client()
     folder = client.get_storage_folder(folder_hash)
-    report = update_items(folder, records, dry_run=dry_run, page_size=page_size, bundle_size=bundle_size)
+    report = update_items(
+        folder,
+        records,
+        dry_run=dry_run,
+        page_size=page_size,
+        bundle_size=bundle_size,
+        progress_interval=progress_interval,
+    )
     report["folder_hash"] = folder_hash
     report["registration_json"] = str(registration_json)
 
