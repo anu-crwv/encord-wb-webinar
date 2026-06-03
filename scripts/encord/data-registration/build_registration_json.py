@@ -48,6 +48,8 @@ CATEGORY_BY_EXT = {
 UPLOAD_KEYS = ["images", "videos", "audio", "text", "pdfs", "image_groups", "scenes", "data_groups"]
 DEFAULT_S3_URI = "s3://ego-data-collection-encord/raw-feed/trossen-data/"
 DEFAULT_AWS_PROFILE = "encord-robotics"
+DEFAULT_OUTPUT_JSON = "registration.json"
+DEFAULT_DRY_RUN_OUTPUT_JSON = "registration_dry_run.json"
 DRY_RUN_MAX_EPISODES = 12
 DRY_RUN_MAX_PREFIXES = 2_000
 
@@ -460,7 +462,7 @@ def build_upload_json(
 def main(
     s3_uri: Annotated[str, typer.Argument(help="S3 prefix to register.")] = DEFAULT_S3_URI,
     profile: Annotated[str | None, typer.Option("--profile", "-p", help="AWS profile name.")] = DEFAULT_AWS_PROFILE,
-    output: Annotated[str, typer.Option("--output", "-o", help="Output upload JSON path.")] = "./registration.json",
+    output: Annotated[str | None, typer.Option("--output", "-o", help="Output upload JSON path.")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run/--full", help="Generate a small representative JSON.")] = False,
 ) -> None:
     bucket, prefix = parse_s3_uri(s3_uri)
@@ -476,12 +478,12 @@ def main(
     contexts = build_contexts(s3, bucket, objects)
     upload_json, skipped_counts = build_upload_json(bucket, region, objects, contexts)
 
-    output_path = PurePosixPath(output)
+    output_path = PurePosixPath(output or (DEFAULT_DRY_RUN_OUTPUT_JSON if dry_run else DEFAULT_OUTPUT_JSON))
     with open(output_path, "w") as f:
         json.dump(upload_json, f, indent=2)
 
     counts = {key: len(upload_json[key]) for key in UPLOAD_KEYS if upload_json[key]}
-    typer.echo(f"Wrote {output}")
+    typer.echo(f"Wrote {output_path}")
     typer.echo(f"Registered item counts: {counts}")
     if skipped_counts:
         typer.echo(f"Skipped counts: {skipped_counts}")
