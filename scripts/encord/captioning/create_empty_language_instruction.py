@@ -48,6 +48,7 @@ def main(
         typer.Option(help="Text classification title in the project ontology."),
     ] = "Language Instruction",
     bundle_size: Annotated[int, typer.Option(help="SDK bundle size for label init/save.")] = 100,
+    progress_every: Annotated[int, typer.Option(help="Print progress every N label rows.")] = 500,
     overwrite: Annotated[
         bool,
         typer.Option(help="Overwrite overlapping existing Language Instruction classifications."),
@@ -70,16 +71,22 @@ def main(
         typer.echo("No video label rows found.")
         return
 
+    typer.echo(f"Found {len(label_rows)} video label rows.")
     touched = []
     skipped = []
 
     with project.create_bundle(bundle_size=min(bundle_size, len(label_rows))) as init_bundle:
-        for label_row in label_rows:
+        for i, label_row in enumerate(label_rows, start=1):
             label_row.initialise_labels(bundle=init_bundle)
+            if progress_every > 0 and i % progress_every == 0:
+                typer.echo(f"Initialized {i}/{len(label_rows)} rows.")
 
-    for label_row in label_rows:
+    typer.echo("Applying empty Language Instruction classifications.")
+    for i, label_row in enumerate(label_rows, start=1):
         if has_classification(label_row, classification_title) and not overwrite:
             skipped.append(label_row.data_title)
+            if progress_every > 0 and i % progress_every == 0:
+                typer.echo(f"Processed {i}/{len(label_rows)} rows.")
             continue
 
         ontology_structure = label_row.ontology_structure
@@ -101,11 +108,16 @@ def main(
             label_row.add_classification_instance(instance, force=overwrite)
 
         touched.append(label_row)
+        if progress_every > 0 and i % progress_every == 0:
+            typer.echo(f"Processed {i}/{len(label_rows)} rows.")
 
     if not dry_run and touched:
+        typer.echo(f"Saving {len(touched)} updated rows.")
         with project.create_bundle(bundle_size=min(bundle_size, len(touched))) as save_bundle:
-            for label_row in touched:
+            for i, label_row in enumerate(touched, start=1):
                 label_row.save(bundle=save_bundle)
+                if progress_every > 0 and i % progress_every == 0:
+                    typer.echo(f"Saved {i}/{len(touched)} rows.")
 
     typer.echo(
         f"{'Would update' if dry_run else 'Updated'} {len(touched)} video label rows; "
