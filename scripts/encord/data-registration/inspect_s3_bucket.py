@@ -8,15 +8,17 @@
 """Explore an S3 prefix before building an Encord registration JSON.
 
 Run:
-    uv run --script scripts/encord/explore_s3_prefix.py s3://bucket/path/ --profile default
+    uv run --script scripts/encord/data-registration/inspect_s3_bucket.py s3://bucket/path/ --profile default
 """
 
 from __future__ import annotations
 
+import json
+import re
 from collections import Counter, deque
 from dataclasses import dataclass
-from pathlib import PurePosixPath
-from typing import Annotated
+from pathlib import Path, PurePosixPath
+from typing import Annotated, Any
 
 import boto3
 import typer
@@ -170,6 +172,170 @@ def data_type_for_key(key: str) -> str:
     return EXTENSION_TO_DATA_TYPE.get(extension_for_key(key), "unknown/unsupported")
 
 
+def serialize_object(obj: dict) -> dict[str, Any]:
+    last_modified = obj.get("LastModified")
+    return {
+        "key": obj["Key"],
+        "size_bytes": obj["Size"],
+        "extension": extension_for_key(obj["Key"]),
+        "data_type": data_type_for_key(obj["Key"]),
+        "last_modified": last_modified.isoformat() if last_modified else None,
+    }
+
+
+def summarize_objects(objects: list[dict], hit_limit: bool, max_objects: int) -> dict[str, Any]:
+    ext_counts = Counter(extension_for_key(obj["Key"]) for obj in objects)
+    type_counts = Counter(data_type_for_key(obj["Key"]) for obj in objects)
+
+    return {
+        "sampled_object_count": len(objects),
+        "sampled_total_size_bytes": sum(obj["Size"] for obj in objects),
+        "hit_limit": hit_limit,
+        "limit": max_objects,
+        "data_type_counts": dict(type_counts.most_common()),
+        "extension_counts": dict(ext_counts.most_common()),
+        "sample_objects": [serialize_object(obj) for obj in objects[:15]],
+    }
+
+
+def build_prefix_tree(
+    s3,
+    bucket: str,
+    root_prefix: str,
+    max_depth: int,
+    max_folders_per_prefix: int,
+    max_files_per_prefix: int,
+) -> dict[str, Any]:
+    def build_node(prefix: str, depth: int) -> dict[str, Any]:
+        files, folders, truncated = list_one_level(
+            s3,
+            bucket,
+            prefix,
+            max_folders=max_folders_per_prefix,
+            max_files=max_files_per_prefix,
+        )
+        node = {
+            "prefix": prefix,
+            "depth": depth,
+            "truncated": truncated,
+            "sampled_direct_files": [serialize_object(obj) for obj in files],
+            "child_prefixes_sampled": folders,
+            "children": [],
+        }
+        if depth < max_depth:
+            node["children"] = [build_node(folder, depth + 1) for folder in folders]
+        return node
+
+    return build_node(root_prefix, 0)
+
+
+def build_balanced_recursive_summaries(
+    s3,
+    bucket: str,
+    root_prefix: str,
+    top_folders: list[str],
+    max_objects: int,
+    sample_per_folder: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    prefixes = top_folders or [root_prefix]
+    summaries: list[dict[str, Any]] = []
+    combined_objects: list[dict] = []
+    remaining = max_objects
+
+    for prefix in prefixes:
+        if remaining <= 0:
+            break
+        limit = min(sample_per_folder, remaining)
+        summary = summarize_prefix(s3, bucket, prefix, limit)
+        combined_objects.extend(summary.objects)
+        remaining -= len(summary.objects)
+        summaries.append(
+            {
+                "prefix": prefix,
+                **summarize_objects(summary.objects, summary.hit_limit, limit),
+            }
+        )
+
+    combined_summary = summarize_objects(
+        combined_objects,
+        len(combined_objects) >= max_objects,
+        max_objects,
+    )
+    return summaries, combined_summary
+
+
+def build_inspection_json(
+    s3,
+    bucket: str,
+    prefix: str,
+    region: str,
+    files: list[dict],
+    folders: list[str],
+    max_objects: int,
+    sample_per_folder: int,
+    tree_depth: int,
+    tree_folders: int,
+    tree_files: int,
+    recursive: bool,
+) -> dict[str, Any]:
+    recursive_summaries: list[dict[str, Any]] = []
+    combined_summary: dict[str, Any] | None = None
+    if recursive:
+        recursive_summaries, combined_summary = build_balanced_recursive_summaries(
+            s3,
+            bucket,
+            prefix,
+            folders,
+            max_objects=max_objects,
+            sample_per_folder=sample_per_folder,
+        )
+
+    return {
+        "s3_uri": f"s3://{bucket}/{prefix}",
+        "bucket": bucket,
+        "prefix": prefix,
+        "region": region,
+        "limits": {
+            "max_objects": max_objects,
+            "sample_per_folder": sample_per_folder,
+            "tree_depth": tree_depth,
+            "tree_folders_per_prefix": tree_folders,
+            "tree_files_per_prefix": tree_files,
+            "recursive": recursive,
+        },
+        "top_level": {
+            "folders": folders,
+            "files": [serialize_object(obj) for obj in files],
+        },
+        "directory_tree_sample": build_prefix_tree(
+            s3,
+            bucket,
+            prefix,
+            max_depth=tree_depth,
+            max_folders_per_prefix=tree_folders,
+            max_files_per_prefix=tree_files,
+        ),
+        "recursive_samples": recursive_summaries,
+        "combined_recursive_sample": combined_summary,
+        "notes": [
+            "The tree uses delimiter-based S3 prefix listings.",
+            "Nodes marked truncated contain additional files or folders beyond the configured sample limits.",
+            "Recursive samples are balanced by top-level prefix to avoid committing repetitive full-bucket listings.",
+        ],
+    }
+
+
+def write_inspection_json(output: Path, inspection: dict[str, Any]) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(inspection, indent=2) + "\n")
+
+
+def default_output_path(bucket: str, prefix: str) -> Path:
+    name = prefix.rstrip("/") or bucket
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_").lower()
+    return Path(__file__).with_name(f"{slug}_s3_structure.json")
+
+
 def print_top_level(files: list[dict], folders: list[str]) -> None:
     typer.echo("\nTop-level folders:")
     if folders:
@@ -312,6 +478,10 @@ def main(
         bool,
         typer.Option("--recursive/--top-level-only", help="Also sample objects recursively by top-level folder."),
     ] = True,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Write the sampled bucket structure to this JSON file."),
+    ] = None,
 ) -> None:
     bucket, prefix = parse_s3_uri(s3_uri)
     session = boto3.Session(profile_name=profile) if profile else boto3.Session()
@@ -342,6 +512,24 @@ def main(
             max_objects=max_objects,
             sample_per_folder=sample_per_folder,
         )
+
+    output_path = output or default_output_path(bucket, prefix)
+    inspection = build_inspection_json(
+        s3,
+        bucket,
+        prefix,
+        region,
+        files,
+        folders,
+        max_objects=max_objects,
+        sample_per_folder=sample_per_folder,
+        tree_depth=tree_depth,
+        tree_folders=tree_folders,
+        tree_files=tree_files,
+        recursive=recursive,
+    )
+    write_inspection_json(output_path, inspection)
+    typer.echo(f"\nWrote JSON: {output_path}")
 
 
 if __name__ == "__main__":
