@@ -33,6 +33,8 @@ DEFAULT_FOLDER_HASH = ""
 DEFAULT_INTEGRATION_HASH = "1a2117d0-7ce1-46b7-a426-48231247585c"
 ENCORD_SSH_KEY_ENV = "ENCORD_SSH_KEY_FILE"
 DRY_RUN_ITEMS_PER_CATEGORY = 5
+UPLOAD_KEYS = ["images", "videos", "audio", "text", "pdfs", "image_groups", "scenes", "data_groups"]
+STALE_CLIENT_METADATA_KEYS = {"video_width", "video_height", "video_codec", "video_has_audio"}
 
 
 def get_client() -> EncordUserClient:
@@ -57,6 +59,10 @@ def default_report_path(registration_json: Path, dry_run: bool) -> Path:
 
 def dry_run_json_path(registration_json: Path) -> Path:
     return registration_json.with_name(f"{registration_json.stem}_dry_run.json")
+
+
+def looks_like_dry_run_json(registration_json: Path) -> bool:
+    return registration_json.stem.endswith("_dry_run")
 
 
 def evenly_sample(items: list[Any], max_items: int) -> list[Any]:
@@ -87,6 +93,65 @@ def build_dry_run_registration_json(registration_json: Path, output_json: Path) 
     typer.echo(f"Dry run JSON: {output_json}")
     typer.echo(f"Dry run item counts: {counts}")
     return output_json
+
+
+def load_registration_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise typer.BadParameter(f"Registration JSON not found: {path}")
+    with path.open() as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise typer.BadParameter(f"Registration JSON must be an object: {path}")
+    return data
+
+
+def iter_upload_items(registration: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    for category in UPLOAD_KEYS:
+        items = registration.get(category, [])
+        if not isinstance(items, list):
+            raise typer.BadParameter(f"Registration JSON field {category!r} must be a list.")
+        for item in items:
+            if isinstance(item, dict):
+                yield category, item
+
+
+def validate_registration_json(registration_json: Path, allow_invalid: bool) -> None:
+    registration = load_registration_json(registration_json)
+    stale_client_metadata = 0
+    jsonl_without_text_metadata = 0
+    videos_without_video_metadata = 0
+
+    for category, item in iter_upload_items(registration):
+        title = str(item.get("title") or item.get("objectUrl") or "")
+        client_metadata = item.get("clientMetadata") or {}
+        if isinstance(client_metadata, dict) and STALE_CLIENT_METADATA_KEYS & set(client_metadata):
+            stale_client_metadata += 1
+        if category == "text" and title.lower().endswith(".jsonl") and not item.get("textMetadata"):
+            jsonl_without_text_metadata += 1
+        if category == "videos" and not item.get("videoMetadata"):
+            videos_without_video_metadata += 1
+
+    blocking_issues = []
+    if stale_client_metadata:
+        blocking_issues.append(f"{stale_client_metadata} item(s) contain stale video fields in clientMetadata")
+    if jsonl_without_text_metadata:
+        blocking_issues.append(f"{jsonl_without_text_metadata} .jsonl item(s) are missing textMetadata")
+
+    if videos_without_video_metadata:
+        typer.echo(
+            f"Registration validation warning: {videos_without_video_metadata} video item(s) are missing videoMetadata.",
+            err=True,
+        )
+
+    if blocking_issues and not allow_invalid:
+        message = "; ".join(blocking_issues)
+        raise typer.BadParameter(
+            f"Registration JSON looks stale: {message}. Rebuild it with build_registration_json.py, "
+            "or pass --allow-invalid-registration-json to upload it anyway."
+        )
+
+    if blocking_issues:
+        typer.echo(f"Registration validation warning: {'; '.join(blocking_issues)}.", err=True)
 
 
 def json_safe(value: Any) -> Any:
@@ -179,10 +244,14 @@ def upload_registration_json(
 
 
 def main(
-    registration_json: Annotated[
-        Path,
+    registration_json_arg: Annotated[
+        Path | None,
         typer.Argument(help="Path to the registration JSON."),
-    ] = Path(DEFAULT_REGISTRATION_JSON),
+    ] = None,
+    registration_json_option: Annotated[
+        Path | None,
+        typer.Option("--registration-json", help="Path to the registration JSON."),
+    ] = None,
     folder_hash: Annotated[
         str,
         typer.Option("--folder-hash", help="Existing Encord storage folder hash. Creates today's folder if empty."),
@@ -199,19 +268,35 @@ def main(
         bool,
         typer.Option("--dry-run", help="Upload a small subset of the registration JSON."),
     ] = False,
+    allow_invalid_registration_json: Annotated[
+        bool,
+        typer.Option("--allow-invalid-registration-json", help="Upload even if validation detects stale JSON."),
+    ] = False,
 ) -> None:
+    if registration_json_arg and registration_json_option and registration_json_arg != registration_json_option:
+        raise typer.BadParameter("Pass the registration JSON either positionally or via --registration-json, not both.")
+    registration_json = registration_json_option or registration_json_arg or Path(DEFAULT_REGISTRATION_JSON)
+
     if not registration_json.exists():
         raise typer.BadParameter(f"Registration JSON not found: {registration_json}")
     if not integration_hash:
         raise typer.BadParameter("Set DEFAULT_INTEGRATION_HASH in this script or pass --integration-hash.")
 
-    client = get_client()
-    storage_folder = get_or_create_folder(client, folder_hash)
+    if dry_run and looks_like_dry_run_json(registration_json):
+        raise typer.BadParameter(
+            f"{registration_json} already looks like a dry-run JSON. Upload it without --dry-run, "
+            "or pass the full registration JSON with --dry-run."
+        )
+
     upload_json = (
         build_dry_run_registration_json(registration_json, dry_run_json_path(registration_json))
         if dry_run
         else registration_json
     )
+    validate_registration_json(upload_json, allow_invalid=allow_invalid_registration_json)
+
+    client = get_client()
+    storage_folder = get_or_create_folder(client, folder_hash)
     report_json = report_json or default_report_path(registration_json, dry_run)
     upload_registration_json(storage_folder, integration_hash, upload_json, report_json)
     typer.echo(f"Storage folder hash: {storage_folder.uuid}")
