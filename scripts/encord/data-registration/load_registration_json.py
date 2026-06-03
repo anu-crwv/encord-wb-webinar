@@ -136,12 +136,8 @@ def validate_registration_json(registration_json: Path, allow_invalid: bool) -> 
         blocking_issues.append(f"{stale_client_metadata} item(s) contain stale video fields in clientMetadata")
     if jsonl_without_text_metadata:
         blocking_issues.append(f"{jsonl_without_text_metadata} .jsonl item(s) are missing textMetadata")
-
     if videos_without_video_metadata:
-        typer.echo(
-            f"Registration validation warning: {videos_without_video_metadata} video item(s) are missing videoMetadata.",
-            err=True,
-        )
+        blocking_issues.append(f"{videos_without_video_metadata} video item(s) are missing videoMetadata")
 
     if blocking_issues and not allow_invalid:
         message = "; ".join(blocking_issues)

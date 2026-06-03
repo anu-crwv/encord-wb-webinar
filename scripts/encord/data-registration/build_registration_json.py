@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import mimetypes
 import re
+import shutil
+import subprocess
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -29,6 +31,7 @@ from urllib.parse import quote
 import boto3
 import pyarrow.parquet as pq
 import typer
+from botocore.config import Config
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv", ".3gp", ".3g2", ".mj2", ".avi"}
 IMAGE_EXTENSIONS = {".jpeg", ".jpg", ".png", ".webp", ".avif", ".bmp", ".tiff", ".tif"}
@@ -450,7 +453,72 @@ def text_metadata_for_object(key: str, size: int) -> dict[str, Any] | None:
     return {"fileSize": int(size), "mime_type": mime_type}
 
 
-def build_item(bucket: str, region: str, obj: dict, ctx: EpisodeContext) -> tuple[str, dict] | None:
+def parse_frame_rate(value: str | None) -> float | None:
+    if not value or value == "0/0":
+        return None
+    if "/" in value:
+        numerator, denominator = value.split("/", 1)
+        try:
+            denominator_float = float(denominator)
+            if denominator_float == 0:
+                return None
+            return float(numerator) / denominator_float
+        except ValueError:
+            return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def ffprobe_video_metadata(s3, bucket: str, key: str, size: int) -> dict[str, Any] | None:
+    if not shutil.which("ffprobe"):
+        typer.echo(f"Warning: ffprobe not found; cannot inspect video {key}", err=True)
+        return None
+
+    url = s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=600)
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height,avg_frame_rate:format=duration",
+        "-of",
+        "json",
+        url,
+    ]
+    try:
+        completed = subprocess.run(command, text=True, capture_output=True, timeout=60, check=True)
+        data = json.loads(completed.stdout)
+        stream = (data.get("streams") or [{}])[0]
+        format_data = data.get("format") or {}
+        width = stream.get("width")
+        height = stream.get("height")
+        duration = format_data.get("duration")
+        fps = parse_frame_rate(stream.get("avg_frame_rate"))
+        if not all((width, height, duration, fps)):
+            typer.echo(f"Warning: ffprobe returned incomplete metadata for {key}", err=True)
+            return None
+        return {
+            "fps": float(fps),
+            "duration": float(duration),
+            "width": int(width),
+            "height": int(height),
+            "file_size": int(size),
+            "mime_type": mime_type_for_key(key) or "video/mp4",
+        }
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "").strip() or f"exit status {exc.returncode}"
+        typer.echo(f"Warning: ffprobe failed for {key}: {detail}", err=True)
+        return None
+    except Exception as exc:
+        typer.echo(f"Warning: ffprobe failed for {key}: {type(exc).__name__}: {exc}", err=True)
+        return None
+
+
+def build_item(s3, bucket: str, region: str, obj: dict, ctx: EpisodeContext) -> tuple[str, dict] | None:
     key = obj["Key"]
     category = category_for_key(key)
     if not category or extension_for_key(key) in SKIP_EXTENSIONS:
@@ -463,6 +531,8 @@ def build_item(bucket: str, region: str, obj: dict, ctx: EpisodeContext) -> tupl
     }
     if category == "videos":
         video_metadata = video_metadata_for_object(key, obj["Size"], ctx)
+        if not video_metadata:
+            video_metadata = ffprobe_video_metadata(s3, bucket, key, obj["Size"])
         if video_metadata:
             item["videoMetadata"] = video_metadata
     if category == "text":
@@ -473,6 +543,7 @@ def build_item(bucket: str, region: str, obj: dict, ctx: EpisodeContext) -> tupl
 
 
 def build_upload_json(
+    s3,
     bucket: str,
     region: str,
     objects: list[dict],
@@ -488,7 +559,7 @@ def build_upload_json(
             skipped[ext] += 1
             continue
         ctx = contexts[episode_path_for_key(key)]
-        built = build_item(bucket, region, obj, ctx)
+        built = build_item(s3, bucket, region, obj, ctx)
         if built is None:
             skipped[ext or "[no extension]"] += 1
             continue
@@ -509,6 +580,7 @@ def main(
     session = boto3.Session(profile_name=profile) if profile else boto3.Session()
     s3 = session.client("s3")
     region = get_bucket_region(s3, bucket)
+    s3 = session.client("s3", region_name=region, config=Config(signature_version="s3v4"))
 
     objects = (
         dry_run_objects(s3, bucket, prefix, DRY_RUN_MAX_EPISODES, DRY_RUN_MAX_PREFIXES)
@@ -516,7 +588,7 @@ def main(
         else list_all_objects(s3, bucket, prefix)
     )
     contexts = build_contexts(s3, bucket, objects)
-    upload_json, skipped_counts = build_upload_json(bucket, region, objects, contexts)
+    upload_json, skipped_counts = build_upload_json(s3, bucket, region, objects, contexts)
 
     output_path = PurePosixPath(output or (DEFAULT_DRY_RUN_OUTPUT_JSON if dry_run else DEFAULT_OUTPUT_JSON))
     with open(output_path, "w") as f:
