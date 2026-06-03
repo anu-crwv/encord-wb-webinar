@@ -41,7 +41,6 @@ ENUM_FIELDS = {
     "robot_type",
     "codebase_version",
     "trossen_subversion",
-    "video_codec",
 }
 
 SCALAR_FIELDS: dict[str, str] = {
@@ -51,9 +50,6 @@ SCALAR_FIELDS: dict[str, str] = {
     "has_episodes_jsonl": "boolean",
     "has_episodes_stats_jsonl": "boolean",
     "has_parquet": "boolean",
-    "video_has_audio": "boolean",
-    "video_width": "number",
-    "video_height": "number",
     "collection_fps": "number",
     "state_dim": "number",
     "action_dim": "number",

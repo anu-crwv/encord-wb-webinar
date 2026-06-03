@@ -36,6 +36,14 @@ AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".eac3", ".m4a", ".mpeg", ".x-wav"}
 PDF_EXTENSIONS = {".pdf"}
 TEXT_EXTENSIONS = {".txt", ".html", ".md", ".xml", ".json", ".jsonl", ".yaml", ".yml", ".csv"}
 SKIP_EXTENSIONS = {".parquet"}
+MIME_TYPE_BY_EXT = {
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".jsonl": "application/x-ndjson",
+    ".md": "text/markdown",
+    ".yaml": "application/x-yaml",
+    ".yml": "application/x-yaml",
+}
 
 CATEGORY_BY_EXT = {
     **{ext: "videos" for ext in VIDEO_EXTENSIONS},
@@ -65,6 +73,7 @@ class EpisodeContext:
     info: dict[str, Any] | None = None
     state_dim: int | None = None
     action_dim: int | None = None
+    frame_count: int | None = None
     parquet_checked: bool = False
     keys: list[str] = field(default_factory=list)
 
@@ -289,6 +298,10 @@ def category_for_key(key: str) -> str | None:
     return CATEGORY_BY_EXT.get(extension_for_key(key))
 
 
+def mime_type_for_key(key: str) -> str | None:
+    return mimetypes.guess_type(key)[0] or MIME_TYPE_BY_EXT.get(extension_for_key(key))
+
+
 def object_url(bucket: str, region: str, key: str) -> str:
     return f"https://{bucket}.s3.{region}.amazonaws.com/{quote(key, safe='/-_.~')}"
 
@@ -313,7 +326,7 @@ def read_info_json(s3, bucket: str, key: str) -> dict[str, Any] | None:
         return None
 
 
-def read_parquet_dims(s3, bucket: str, key: str) -> tuple[int | None, int | None]:
+def read_parquet_summary(s3, bucket: str, key: str) -> tuple[int | None, int | None, int | None]:
     try:
         body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         table = pq.read_table(BytesIO(body), columns=["action", "observation.state"])
@@ -322,10 +335,10 @@ def read_parquet_dims(s3, bucket: str, key: str) -> tuple[int | None, int | None
         state = data.get("observation.state") or []
         action_dim = len(action[0]) if action else None
         state_dim = len(state[0]) if state else None
-        return action_dim, state_dim
+        return action_dim, state_dim, table.num_rows
     except Exception as exc:
         typer.echo(f"Warning: could not inspect parquet {key}: {exc}", err=True)
-        return None, None
+        return None, None, None
 
 
 def build_contexts(s3, bucket: str, objects: list[dict]) -> dict[str, EpisodeContext]:
@@ -349,9 +362,10 @@ def build_contexts(s3, bucket: str, objects: list[dict]) -> dict[str, EpisodeCon
             ctx.info = read_info_json(s3, bucket, info_key)
         parquet_key = next((key for key in ctx.keys if extension_for_key(key) == ".parquet"), None)
         if parquet_key:
-            action_dim, state_dim = read_parquet_dims(s3, bucket, parquet_key)
+            action_dim, state_dim, frame_count = read_parquet_summary(s3, bucket, parquet_key)
             ctx.action_dim = action_dim
             ctx.state_dim = state_dim
+            ctx.frame_count = frame_count
             ctx.parquet_checked = True
     return contexts
 
@@ -401,17 +415,39 @@ def metadata_for_object(bucket: str, key: str, size: int, ctx: EpisodeContext) -
     add_if_present(metadata, "state_dim", ctx.state_dim)
     add_if_present(metadata, "action_dim", ctx.action_dim)
 
-    sensor_key = path_meta.get("sensor_key")
-    if sensor_key:
-        feature = (info.get("features") or {}).get(sensor_key) or {}
-        video_info = feature.get("info") or {}
-        add_if_present(metadata, "video_width", video_info.get("video.width"))
-        add_if_present(metadata, "video_height", video_info.get("video.height"))
-        add_if_present(metadata, "video_codec", video_info.get("video.codec"))
-        if "has_audio" in video_info:
-            metadata["video_has_audio"] = bool(video_info["has_audio"])
-
     return metadata
+
+
+def video_metadata_for_object(key: str, size: int, ctx: EpisodeContext) -> dict[str, Any] | None:
+    path_meta = parse_path_metadata(key)
+    sensor_key = path_meta.get("sensor_key")
+    if not sensor_key:
+        return None
+
+    info = ctx.info or {}
+    feature = (info.get("features") or {}).get(sensor_key) or {}
+    video_info = feature.get("info") or {}
+    fps = video_info.get("video.fps") or info.get("fps")
+    width = video_info.get("video.width")
+    height = video_info.get("video.height")
+    if not all((fps, width, height, ctx.frame_count)):
+        return None
+
+    return {
+        "fps": float(fps),
+        "duration": float(ctx.frame_count) / float(fps),
+        "width": int(width),
+        "height": int(height),
+        "file_size": int(size),
+        "mime_type": mime_type_for_key(key) or "video/mp4",
+    }
+
+
+def text_metadata_for_object(key: str, size: int) -> dict[str, Any] | None:
+    mime_type = mime_type_for_key(key)
+    if not mime_type:
+        return None
+    return {"fileSize": int(size), "mime_type": mime_type}
 
 
 def build_item(bucket: str, region: str, obj: dict, ctx: EpisodeContext) -> tuple[str, dict] | None:
@@ -425,10 +461,14 @@ def build_item(bucket: str, region: str, obj: dict, ctx: EpisodeContext) -> tupl
         "title": key,
         "clientMetadata": metadata_for_object(bucket, key, obj["Size"], ctx),
     }
+    if category == "videos":
+        video_metadata = video_metadata_for_object(key, obj["Size"], ctx)
+        if video_metadata:
+            item["videoMetadata"] = video_metadata
     if category == "text":
-        mime_type = mimetypes.guess_type(key)[0]
-        if mime_type:
-            item["textMetadata"] = {"fileSize": obj["Size"], "mime_type": mime_type}
+        text_metadata = text_metadata_for_object(key, obj["Size"])
+        if text_metadata:
+            item["textMetadata"] = text_metadata
     return category, item
 
 
