@@ -10,9 +10,6 @@
 
 Run:
     uv run --script scripts/encord/data-registration/build_registration_json.py \
-      s3://ego-data-collection-encord/raw-feed/trossen-data/ \
-      --profile encord-robotics \
-      --output scripts/encord/data-registration/upload_json.dry-run.json \
       --dry-run
 """
 
@@ -49,8 +46,10 @@ CATEGORY_BY_EXT = {
 }
 
 UPLOAD_KEYS = ["images", "videos", "audio", "text", "pdfs", "image_groups", "scenes", "data_groups"]
-DEFAULT_S3_URI = "s3://ego-data-collection-encord/raw-feed/"
+DEFAULT_S3_URI = "s3://ego-data-collection-encord/raw-feed/trossen-data/"
 DEFAULT_AWS_PROFILE = "encord-robotics"
+DRY_RUN_MAX_EPISODES = 12
+DRY_RUN_MAX_PREFIXES = 2_000
 
 
 @dataclass
@@ -463,14 +462,6 @@ def main(
     profile: Annotated[str | None, typer.Option("--profile", "-p", help="AWS profile name.")] = DEFAULT_AWS_PROFILE,
     output: Annotated[str, typer.Option("--output", "-o", help="Output upload JSON path.")] = "./registration.json",
     dry_run: Annotated[bool, typer.Option("--dry-run/--full", help="Generate a small representative JSON.")] = False,
-    dry_run_max_episodes: Annotated[
-        int,
-        typer.Option("--dry-run-max-episodes", help="Maximum sampled episode prefixes in dry-run mode."),
-    ] = 12,
-    dry_run_max_prefixes: Annotated[
-        int,
-        typer.Option("--dry-run-max-prefixes", help="Maximum prefixes to visit while finding dry-run samples."),
-    ] = 2_000,
 ) -> None:
     bucket, prefix = parse_s3_uri(s3_uri)
     session = boto3.Session(profile_name=profile) if profile else boto3.Session()
@@ -478,7 +469,7 @@ def main(
     region = get_bucket_region(s3, bucket)
 
     objects = (
-        dry_run_objects(s3, bucket, prefix, dry_run_max_episodes, dry_run_max_prefixes)
+        dry_run_objects(s3, bucket, prefix, DRY_RUN_MAX_EPISODES, DRY_RUN_MAX_PREFIXES)
         if dry_run
         else list_all_objects(s3, bucket, prefix)
     )

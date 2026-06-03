@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "boto3",
-#     "encord @ git+ssh://git@github.com/encord-team/encord-client-python-private.git@b1edece2",
+#     "encord",
 #     "typer",
 # ]
 # ///
@@ -10,19 +10,17 @@
 
 Run:
     uv run --script scripts/encord/data-registration/create_metadata_schema.py \
-      s3://ego-data-collection-encord/raw-feed/ \
-      --profile encord-robotics \
-      --ssh-key-file /path/to/encord_key \
       --dry-run
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Annotated, Any
 
 import boto3
@@ -31,6 +29,9 @@ from encord.metadata_schema import MetadataSchemaError
 from encord.user_client import EncordUserClient
 
 MAX_ENUM_VALUES = 255
+DEFAULT_S3_URI = "s3://ego-data-collection-encord/raw-feed/"
+DEFAULT_AWS_PROFILE = "encord-robotics"
+ENCORD_SSH_KEY_ENV = "ENCORD_SSH_KEY_FILE"
 
 ENUM_FIELDS = {
     "source_family",
@@ -111,20 +112,32 @@ def parse_s3_uri(uri: str) -> tuple[str, str]:
     return bucket, prefix
 
 
-def iter_objects(s3, bucket: str, prefix: str, max_objects: int) -> tuple[list[dict], bool]:
+def list_one_level(s3, bucket: str, prefix: str) -> tuple[list[dict], list[str]]:
     paginator = s3.get_paginator("list_objects_v2")
-    objects: list[dict] = []
-    hit_limit = False
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+    files: list[dict] = []
+    folders: list[str] = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if key.endswith("/") or PurePosixPath(key).name == ".DS_Store":
                 continue
-            objects.append(obj)
-            if len(objects) >= max_objects:
-                hit_limit = True
-                return objects, hit_limit
-    return objects, hit_limit
+            files.append(obj)
+        folders.extend(item["Prefix"] for item in page.get("CommonPrefixes", []))
+    return files, folders
+
+
+def find_first_key_named(s3, bucket: str, prefix: str, filename: str, max_prefixes: int = 200) -> str | None:
+    queue = [prefix]
+    visited = 0
+    while queue and visited < max_prefixes:
+        current = queue.pop(0)
+        visited += 1
+        files, folders = list_one_level(s3, bucket, current)
+        for obj in files:
+            if PurePosixPath(obj["Key"]).name == filename:
+                return obj["Key"]
+        queue.extend(folders)
+    return None
 
 
 def extension_for_key(key: str) -> str:
@@ -222,51 +235,102 @@ def read_small_json(s3, bucket: str, key: str) -> dict[str, Any] | None:
         return None
 
 
-def discover_enum_values(s3, bucket: str, objects: list[dict]) -> dict[str, set[str]]:
+def add_info_values(values: dict[str, set[str]], info: dict[str, Any] | None) -> None:
+    if not info:
+        return
+    for field in ("robot_type", "codebase_version", "trossen_subversion"):
+        if info.get(field):
+            values[field].add(str(info[field]))
+    features = info.get("features") or {}
+    for feature_key, feature in features.items():
+        if isinstance(feature, dict) and feature.get("dtype") == "video":
+            values["sensor_key"].add(feature_key)
+            values["camera_name"].add(feature_key.removeprefix("observation.images."))
+            codec = (feature.get("info") or {}).get("video.codec")
+            if codec:
+                values["video_codec"].add(str(codec))
+
+
+def add_file_values(values: dict[str, set[str]], key: str) -> None:
+    ext = extension_for_key(key)
+    if ext:
+        values["file_ext"].add(ext)
+    values["metadata_file_role"].add(metadata_file_role(key))
+    family = source_family_for_key(key)
+    if family:
+        values["source_family"].add(family)
+    path_meta = parse_path_metadata(key)
+    for field in ("source_family", "task_name", "environment", "camera_name", "sensor_key"):
+        if path_meta.get(field):
+            values[field].add(str(path_meta[field]))
+
+
+def discover_trossen_values(s3, bucket: str, family_prefix: str, values: dict[str, set[str]]) -> None:
+    _files, task_prefixes = list_one_level(s3, bucket, family_prefix)
+    for task_prefix in task_prefixes:
+        task_name = PurePosixPath(task_prefix.rstrip("/")).name
+        values["task_name"].add(task_name)
+
+        _task_files, environment_prefixes = list_one_level(s3, bucket, task_prefix)
+        for environment_prefix in environment_prefixes:
+            values["environment"].add(PurePosixPath(environment_prefix.rstrip("/")).name)
+
+    info_key = find_first_key_named(s3, bucket, family_prefix, "info.json", max_prefixes=80)
+    if info_key:
+        add_file_values(values, info_key)
+        add_info_values(values, read_small_json(s3, bucket, info_key))
+
+
+def discover_egocentric_values(s3, bucket: str, family_prefix: str, values: dict[str, set[str]]) -> None:
+    _files, child_prefixes = list_one_level(s3, bucket, family_prefix)
+    for child_prefix in child_prefixes:
+        child_name = PurePosixPath(child_prefix.rstrip("/")).name
+        if child_name != "Meta-POC":
+            continue
+        values["environment"].add(child_name)
+        _meta_files, task_prefixes = list_one_level(s3, bucket, child_prefix)
+        for task_prefix in task_prefixes:
+            values["task_name"].add(PurePosixPath(task_prefix.rstrip("/")).name)
+
+
+def discover_enum_values(s3, bucket: str, prefix: str) -> dict[str, set[str]]:
     values: dict[str, set[str]] = defaultdict(set)
     for field, field_values in STATIC_ENUM_VALUES.items():
         values[field].update(field_values)
 
-    for obj in objects:
-        key = obj["Key"]
-        ext = extension_for_key(key)
-        if ext:
-            values["file_ext"].add(ext)
-        role = metadata_file_role(key)
-        values["metadata_file_role"].add(role)
+    root_files, root_folders = list_one_level(s3, bucket, prefix)
+    for obj in root_files:
+        add_file_values(values, obj["Key"])
+        if metadata_file_role(obj["Key"]) == "info":
+            add_info_values(values, read_small_json(s3, bucket, obj["Key"]))
 
-        family = source_family_for_key(key)
-        if family:
-            values["source_family"].add(family)
+    prefix_family = source_family_for_key(prefix.rstrip("/"))
+    prefix_leaf = PurePosixPath(prefix.rstrip("/")).name
+    family_prefixes = [prefix] if prefix_family == prefix_leaf else (root_folders or [prefix])
+    for family_prefix in family_prefixes:
+        family = source_family_for_key(family_prefix.rstrip("/")) or PurePosixPath(family_prefix.rstrip("/")).name
+        values["source_family"].add(family)
+        typer.echo(f"Discovered source family: {family}")
 
-        path_meta = parse_path_metadata(key)
-        for field in ("source_family", "task_name", "environment", "camera_name", "sensor_key"):
-            if path_meta.get(field):
-                values[field].add(str(path_meta[field]))
+        family_files, _family_folders = list_one_level(s3, bucket, family_prefix)
+        for obj in family_files:
+            add_file_values(values, obj["Key"])
+            if metadata_file_role(obj["Key"]) == "info":
+                add_info_values(values, read_small_json(s3, bucket, obj["Key"]))
 
-        if role == "info":
-            info = read_small_json(s3, bucket, key)
-            if not info:
-                continue
-            for field in ("robot_type", "codebase_version", "trossen_subversion"):
-                if info.get(field):
-                    values[field].add(str(info[field]))
-            features = info.get("features") or {}
-            for feature_key, feature in features.items():
-                if isinstance(feature, dict) and feature.get("dtype") == "video":
-                    values["sensor_key"].add(feature_key)
-                    values["camera_name"].add(feature_key.removeprefix("observation.images."))
-                    codec = (feature.get("info") or {}).get("video.codec")
-                    if codec:
-                        values["video_codec"].add(str(codec))
+        if family in {"trossen-data", "trossen-data-stationary"}:
+            discover_trossen_values(s3, bucket, family_prefix, values)
+        elif family == "egocentric":
+            discover_egocentric_values(s3, bucket, family_prefix, values)
 
     return values
 
 
-def connect_client(ssh_key_file: str) -> EncordUserClient:
+def connect_client() -> EncordUserClient:
+    ssh_key_file = os.environ.get(ENCORD_SSH_KEY_ENV)
     if not ssh_key_file:
-        raise typer.BadParameter("--ssh-key-file is required")
-    return EncordUserClient.create_with_ssh_private_key(Path(ssh_key_file).read_text())
+        raise typer.BadParameter(f"Set {ENCORD_SSH_KEY_ENV} to the path of your Encord SSH private key.")
+    return EncordUserClient.create_with_ssh_private_key(ssh_private_key_path=ssh_key_file)
 
 
 def apply_schema(client: EncordUserClient, enum_values: dict[str, set[str]], dry_run: bool) -> None:
@@ -317,24 +381,39 @@ def apply_schema(client: EncordUserClient, enum_values: dict[str, set[str]], dry
         typer.echo("Saved metadata schema.")
 
 
+def preview_schema(enum_values: dict[str, set[str]]) -> None:
+    typer.echo("Enum fields:")
+    for field in sorted(ENUM_FIELDS):
+        values = sorted(v for v in enum_values.get(field, set()) if v)
+        if values:
+            typer.echo(f"  {field}: {len(values)} values")
+        else:
+            typer.echo(f"  {field}: no values discovered")
+
+    typer.echo("Scalar fields:")
+    for field, data_type in sorted(SCALAR_FIELDS.items()):
+        typer.echo(f"  {field}: {data_type}")
+
+
 def main(
-    s3_uri: Annotated[str, typer.Argument(help="S3 prefix to inspect for enum values.")],
-    profile: Annotated[str | None, typer.Option("--profile", "-p", help="AWS profile name.")] = None,
-    ssh_key_file: Annotated[str, typer.Option("--ssh-key-file", help="Path to Encord SSH private key.")] = "",
-    max_objects: Annotated[int, typer.Option("--max-objects", help="Maximum S3 objects to inspect.")] = 50_000,
-    dry_run: Annotated[bool, typer.Option("--dry-run/--apply", help="Print schema changes without saving.")] = True,
+    s3_uri: Annotated[
+        str,
+        typer.Argument(help="S3 prefix to inspect for enum values."),
+    ] = DEFAULT_S3_URI,
+    profile: Annotated[str | None, typer.Option("--profile", "-p", help="AWS profile name.")] = DEFAULT_AWS_PROFILE,
+    dry_run: Annotated[bool, typer.Option("--dry-run/--apply", help="Print schema changes without saving.")] = False,
 ) -> None:
     bucket, prefix = parse_s3_uri(s3_uri)
     session = boto3.Session(profile_name=profile) if profile else boto3.Session()
     s3 = session.client("s3")
 
-    objects, hit_limit = iter_objects(s3, bucket, prefix, max_objects)
-    if hit_limit:
-        typer.echo(f"Warning: stopped at --max-objects={max_objects}; enum discovery may be incomplete.", err=True)
+    typer.echo(f"Inspecting {s3_uri} for enum values...")
+    enum_values = discover_enum_values(s3, bucket, prefix)
+    if dry_run:
+        preview_schema(enum_values)
+        return
 
-    enum_values = discover_enum_values(s3, bucket, objects)
-    typer.echo(f"Inspected {len(objects)} S3 objects.")
-    client = connect_client(ssh_key_file)
+    client = connect_client()
     apply_schema(client, enum_values, dry_run=dry_run)
 
 
