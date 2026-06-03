@@ -16,10 +16,13 @@ Run:
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import date
+from enum import Enum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
+from urllib.parse import unquote, urlparse
 
 import typer
 from encord.orm.dataset import LongPollingStatus
@@ -29,6 +32,7 @@ DEFAULT_REGISTRATION_JSON = "registration.json"
 DEFAULT_FOLDER_HASH = ""
 DEFAULT_INTEGRATION_HASH = "1a2117d0-7ce1-46b7-a426-48231247585c"
 ENCORD_SSH_KEY_ENV = "ENCORD_SSH_KEY_FILE"
+DRY_RUN_ITEMS_PER_CATEGORY = 5
 
 
 def get_client() -> EncordUserClient:
@@ -46,26 +50,132 @@ def get_or_create_folder(client: EncordUserClient, folder_hash: str) -> object:
     return client.create_storage_folder(name=folder_name)
 
 
-def upload_registration_json(storage_folder, integration_hash: str, registration_json: Path) -> None:
+def default_report_path(registration_json: Path, dry_run: bool) -> Path:
+    suffix = "report_dry_run" if dry_run else "upload_report"
+    return registration_json.with_name(f"{registration_json.stem}_{suffix}.json")
+
+
+def dry_run_json_path(registration_json: Path) -> Path:
+    return registration_json.with_name(f"{registration_json.stem}_dry_run.json")
+
+
+def evenly_sample(items: list[Any], max_items: int) -> list[Any]:
+    if len(items) <= max_items:
+        return items
+    if max_items <= 1:
+        return items[:max_items]
+    last = len(items) - 1
+    indexes = [round(i * last / (max_items - 1)) for i in range(max_items)]
+    return [items[index] for index in indexes]
+
+
+def build_dry_run_registration_json(registration_json: Path, output_json: Path) -> Path:
+    source = json.loads(registration_json.read_text())
+    subset: dict[str, Any] = {}
+    counts: dict[str, int] = {}
+
+    for key, value in source.items():
+        if isinstance(value, list):
+            sampled = evenly_sample(value, DRY_RUN_ITEMS_PER_CATEGORY)
+            subset[key] = sampled
+            if sampled:
+                counts[key] = len(sampled)
+        else:
+            subset[key] = value
+
+    output_json.write_text(json.dumps(subset, indent=2))
+    typer.echo(f"Dry run JSON: {output_json}")
+    typer.echo(f"Dry run item counts: {counts}")
+    return output_json
+
+
+def json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): json_safe(v) for k, v in value.items()}
+    if isinstance(value, list | tuple | set):
+        return [json_safe(item) for item in value]
+    if hasattr(value, "__dict__"):
+        return {k: json_safe(v) for k, v in vars(value).items() if not k.startswith("_")}
+    return str(value)
+
+
+def unit_error_to_dict(error: Any) -> dict[str, Any]:
+    object_urls = list(getattr(error, "object_urls", []) or [])
+    return {
+        "error": str(getattr(error, "error", error)),
+        "object_url_count": len(object_urls),
+        "object_urls": object_urls,
+        "failed_objects": [parse_object_url(url) for url in object_urls],
+    }
+
+
+def parse_object_url(object_url: str) -> dict[str, str]:
+    parsed = urlparse(object_url)
+    host = parsed.netloc
+    bucket = host.split(".s3.", 1)[0] if ".s3." in host else ""
+    key = unquote(parsed.path.lstrip("/"))
+    return {
+        "object_url": object_url,
+        "bucket": bucket,
+        "key": key,
+        "extension": Path(key).suffix.lower(),
+    }
+
+
+def build_report(result: Any, registration_json: Path, storage_folder: Any) -> dict[str, Any]:
+    unit_errors = [unit_error_to_dict(error) for error in getattr(result, "unit_errors", []) or []]
+    return {
+        "registration_json": str(registration_json),
+        "storage_folder_hash": str(getattr(storage_folder, "uuid", "")),
+        "status": json_safe(getattr(result, "status", None)),
+        "errors": json_safe(getattr(result, "errors", [])),
+        "units_pending_count": json_safe(getattr(result, "units_pending_count", 0)),
+        "unit_error_count": len(unit_errors),
+        "failed_object_url_count": sum(error["object_url_count"] for error in unit_errors),
+        "unit_errors": unit_errors,
+    }
+
+
+def write_report(report_path: Path, report: dict[str, Any]) -> None:
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2))
+
+
+def upload_registration_json(
+    storage_folder,
+    integration_hash: str,
+    registration_json: Path,
+    report_json: Path,
+) -> None:
     upload_job_id = storage_folder.add_private_data_to_folder_start(
         integration_id=integration_hash,
         private_files=str(registration_json),
         ignore_errors=True,
     )
     result = storage_folder.add_private_data_to_folder_get_result(upload_job_id)
+    report = build_report(result, registration_json, storage_folder)
+    write_report(report_json, report)
 
     if result.status == LongPollingStatus.DONE:
         typer.echo("Upload finished.")
-        if result.unit_errors:
-            typer.echo("Some items failed:")
-            for err in result.unit_errors:
-                typer.echo(f"- {err.error}: {len(err.object_urls)} object URLs")
+        if report["unit_error_count"]:
+            typer.echo(
+                f"{report['failed_object_url_count']} object URLs failed across "
+                f"{report['unit_error_count']} error group(s)."
+            )
+        typer.echo(f"Report JSON: {report_json}")
         return
 
     if result.status == LongPollingStatus.PENDING:
-        raise RuntimeError(f"Upload timed out. Pending units: {result.units_pending_count}")
+        raise RuntimeError(f"Upload timed out. Pending units: {result.units_pending_count}. Report JSON: {report_json}")
 
-    raise RuntimeError(f"Upload failed: {result.errors}")
+    raise RuntimeError(f"Upload failed. Report JSON: {report_json}")
 
 
 def main(
@@ -81,6 +191,14 @@ def main(
         str,
         typer.Option("--integration-hash", help="Encord cloud integration hash."),
     ] = DEFAULT_INTEGRATION_HASH,
+    report_json: Annotated[
+        Path | None,
+        typer.Option("--report-json", help="Path for the upload result and failure report JSON."),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Upload a small subset of the registration JSON."),
+    ] = False,
 ) -> None:
     if not registration_json.exists():
         raise typer.BadParameter(f"Registration JSON not found: {registration_json}")
@@ -89,7 +207,13 @@ def main(
 
     client = get_client()
     storage_folder = get_or_create_folder(client, folder_hash)
-    upload_registration_json(storage_folder, integration_hash, registration_json)
+    upload_json = (
+        build_dry_run_registration_json(registration_json, dry_run_json_path(registration_json))
+        if dry_run
+        else registration_json
+    )
+    report_json = report_json or default_report_path(registration_json, dry_run)
+    upload_registration_json(storage_folder, integration_hash, upload_json, report_json)
     typer.echo(f"Storage folder hash: {storage_folder.uuid}")
 
 
