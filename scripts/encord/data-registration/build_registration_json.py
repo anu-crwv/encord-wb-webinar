@@ -49,6 +49,8 @@ CATEGORY_BY_EXT = {
 }
 
 UPLOAD_KEYS = ["images", "videos", "audio", "text", "pdfs", "image_groups", "scenes", "data_groups"]
+DEFAULT_S3_URI = "s3://ego-data-collection-encord/raw-feed/"
+DEFAULT_AWS_PROFILE = "encord-robotics"
 
 
 @dataclass
@@ -457,8 +459,8 @@ def build_upload_json(
 
 
 def main(
-    s3_uri: Annotated[str, typer.Argument(help="S3 prefix to register.")],
-    profile: Annotated[str | None, typer.Option("--profile", "-p", help="AWS profile name.")] = None,
+    s3_uri: Annotated[str, typer.Argument(help="S3 prefix to register.")] = DEFAULT_S3_URI,
+    profile: Annotated[str | None, typer.Option("--profile", "-p", help="AWS profile name.")] = DEFAULT_AWS_PROFILE,
     output: Annotated[str, typer.Option("--output", "-o", help="Output upload JSON path.")] = "./registration.json",
     dry_run: Annotated[bool, typer.Option("--dry-run/--full", help="Generate a small representative JSON.")] = False,
     dry_run_max_episodes: Annotated[
