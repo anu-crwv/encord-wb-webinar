@@ -213,6 +213,10 @@ def video_sort_key(item: Any) -> tuple[int, str]:
     return order.get(camera_name, 99), str(getattr(item, "name", ""))
 
 
+def video_items_by_camera(video_items: list[Any]) -> dict[str, Any]:
+    return {str(item_metadata(item).get("camera_name") or ""): item for item in video_items}
+
+
 def group_video_children(group_item: Any, client: Any) -> list[Any]:
     from encord.orm.storage import StorageItemType
 
@@ -221,47 +225,94 @@ def group_video_children(group_item: Any, client: Any) -> list[Any]:
     return sorted(videos, key=video_sort_key)
 
 
-def build_video_grid(video_keys: list[str]) -> Any:
-    from encord.orm.group_layout import DataUnitTile, LayoutGrid
+def sanitize_layout_key(value: str) -> str:
+    key = re.sub(r"[^A-Za-z0-9]+", "_", value.lower()).strip("_")
+    return key or "item"
 
-    tiles = [DataUnitTile(key=key) for key in video_keys]
-    if len(tiles) == 1:
-        return tiles[0]
-    if len(tiles) == 2:
-        return LayoutGrid(direction="row", split_percentage=50, first=tiles[0], second=tiles[1])
-    return LayoutGrid(
-        direction="row",
-        split_percentage=34,
-        first=tiles[0],
-        second=LayoutGrid(direction="row", split_percentage=50, first=tiles[1], second=tiles[2]),
-    )
+
+def unique_key(base: str, existing: set[str]) -> str:
+    key = base
+    index = 2
+    while key in existing:
+        key = f"{base}_{index}"
+        index += 1
+    existing.add(key)
+    return key
+
+
+def metadata_role(item: Any) -> str:
+    metadata = item_metadata(item)
+    role = str(metadata.get("metadata_file_role") or "")
+    if role and role != "none":
+        return role
+
+    source_key = str(metadata.get("source_key") or getattr(item, "name", ""))
+    name = Path(source_key).name
+    if name == "info.json":
+        return "info_json"
+    if name == "tasks.jsonl":
+        return "tasks_jsonl"
+    if name == "episodes.jsonl":
+        return "episodes_jsonl"
+    if name == "episodes_stats.jsonl":
+        return "episodes_stats_jsonl"
+    return sanitize_layout_key(name)
+
+
+def metadata_sort_key(item: Any) -> tuple[int, str]:
+    order = {
+        "info_json": 0,
+        "info": 0,
+        "tasks_jsonl": 1,
+        "tasks": 1,
+        "episodes_jsonl": 2,
+        "episodes": 2,
+        "episodes_stats_jsonl": 3,
+        "episodes_stats": 3,
+    }
+    role = metadata_role(item)
+    return order.get(role, 99), role
 
 
 def build_custom_group(episode_path: str, group_item: Any, video_items: list[Any], json_items: list[Any]) -> Any:
-    from encord.orm.group_layout import DataUnitCarouselTile, LayoutGrid
+    from encord.orm.group_layout import DataUnitCarouselTile, DataUnitTile, LayoutGrid
     from encord.orm.storage import DataGroupCustom
 
     layout_contents: dict[str, UUID] = {}
+    used_keys: set[str] = set()
 
-    video_keys = []
-    for index, item in enumerate(video_items):
-        key = f"video_{index}"
-        layout_contents[key] = item.uuid
-        video_keys.append(key)
+    by_camera = video_items_by_camera(video_items)
+    high_key = unique_key("camera_cam_high", used_keys)
+    left_key = unique_key("camera_cam_left_wrist", used_keys)
+    right_key = unique_key("camera_cam_right_wrist", used_keys)
+    layout_contents[high_key] = by_camera["cam_high"].uuid
+    layout_contents[left_key] = by_camera["cam_left_wrist"].uuid
+    layout_contents[right_key] = by_camera["cam_right_wrist"].uuid
 
     json_keys = []
-    for index, item in enumerate(json_items):
-        key = f"json_{index}"
+    for item in sorted(json_items, key=metadata_sort_key):
+        key = unique_key(f"metadata_{sanitize_layout_key(metadata_role(item))}", used_keys)
         layout_contents[key] = item.uuid
         json_keys.append(key)
 
-    video_grid = build_video_grid(video_keys)
     json_carousel = DataUnitCarouselTile(keys=json_keys, carousel_position="bottom", carousel_size=10)
+    wrist_grid = LayoutGrid(
+        direction="row",
+        split_percentage=50,
+        first=DataUnitTile(key=left_key),
+        second=DataUnitTile(key=right_key),
+    )
+    right_side = LayoutGrid(direction="column", split_percentage=50, first=wrist_grid, second=json_carousel)
 
     return DataGroupCustom(
         name=group_name(episode_path),
         layout_contents=layout_contents,
-        layout=LayoutGrid(direction="column", split_percentage=75, first=video_grid, second=json_carousel),
+        layout=LayoutGrid(
+            direction="row",
+            split_percentage=50,
+            first=DataUnitTile(key=high_key),
+            second=right_side,
+        ),
         client_metadata={
             "probe": "custom-carousel-data-group",
             "episode_path": episode_path,
@@ -339,8 +390,10 @@ def main(
         for tile_index, item in enumerate(json_items, start=1):
             typer.echo(f"  json {tile_index}: {item.uuid} | {item.name}")
 
-        if len(video_items) != 3:
-            typer.echo(f"  skipping: expected 3 video children, found {len(video_items)}")
+        cameras = set(video_items_by_camera(video_items))
+        expected_cameras = {"cam_high", "cam_left_wrist", "cam_right_wrist"}
+        if cameras != expected_cameras:
+            typer.echo(f"  skipping: expected cameras {sorted(expected_cameras)}, found {sorted(cameras)}")
             continue
 
         try:
