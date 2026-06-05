@@ -13,6 +13,7 @@ import os
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
+from math import ceil
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlparse
@@ -249,6 +250,12 @@ def default_output_folder_name() -> str:
     return f"data-groups-output-{timestamp}"
 
 
+def progress_points(total: int) -> dict[int, int]:
+    if total <= 0:
+        return {}
+    return {max(1, ceil(total * fraction / 4)): fraction * 25 for fraction in range(1, 5)}
+
+
 def video_sort_key(item: Any) -> tuple[int, str]:
     camera_name = str(item_metadata(item).get("camera_name") or "")
     order = {
@@ -352,7 +359,7 @@ def build_custom_group(episode_path: str, source_folder_id: UUID, video_items: l
             second=right_side,
         ),
         client_metadata={
-            "probe": "custom-carousel-data-group",
+            "probe": "data-group-with-metadata",
             "episode_path": episode_path,
             "source_folder_id": str(source_folder_id),
             "video_uuids": [str(item.uuid) for item in video_items],
@@ -369,7 +376,7 @@ def main(
     limit: Annotated[int, typer.Option(help="Max matched groups to create unless --no-limit is passed.")] = 5,
     no_limit: Annotated[
         bool,
-        typer.Option("--no-limit", help="Create custom carousel groups for every match."),
+        typer.Option("--no-limit", help="Create data groups for every match."),
     ] = False,
     output_folder_name: Annotated[str | None, typer.Option(help="Name for the new output folder.")] = None,
     debug: Annotated[bool, typer.Option("--debug", help="Print capped diagnostics while matching raw items.")] = False,
@@ -386,19 +393,18 @@ def main(
         if items["videos"] and items["jsons"]:
             matches.append((episode_path, sorted(items["videos"], key=video_sort_key), items["jsons"]))
 
-    typer.echo(f"Matched {len(matches)} episodes with videos and JSON metadata.")
     selected = matches if no_limit else matches[:limit]
-    typer.echo(f"Creating {len(selected)} custom carousel groups.")
+    typer.echo(f"Matched {len(matches)} episodes. Creating {len(selected)} data groups.")
     if not selected:
-        typer.echo("No matching groups to create. No output folder created.")
+        typer.echo("No output folder created.")
         return
 
     output_name = output_folder_name or default_output_folder_name()
     output_folder = client.create_storage_folder(
         name=output_name,
-        description="Custom carousel data group output.",
+        description="Data groups with 3 camera videos and metadata carousel.",
         client_metadata={
-            "probe": "custom-carousel-data-group-output",
+            "probe": "data-groups-with-metadata-output",
             "all_data_folder_id": str(all_data_folder_id),
             "matched_episode_count": len(matches),
             "created_group_limit": None if no_limit else limit,
@@ -407,35 +413,50 @@ def main(
     typer.echo(f"Output folder: {output_folder.uuid} | {output_folder.name}")
 
     dataset = client.get_dataset(dataset_hash) if dataset_hash is not None else None
+    marks = progress_points(len(selected))
+    created = 0
+    skipped = 0
+    failed = 0
 
     for index, (episode_path, video_items, json_items) in enumerate(selected, start=1):
-        typer.echo("")
-        typer.echo(f"[{index}/{len(selected)}] {episode_path}")
-        for tile_index, item in enumerate(video_items, start=1):
-            camera_name = item_metadata(item).get("camera_name")
-            typer.echo(f"  video {tile_index}: {item.uuid} | {camera_name} | {item.name}")
-        for tile_index, item in enumerate(json_items, start=1):
-            typer.echo(f"  json {tile_index}: {item.uuid} | {item.name}")
+        if debug:
+            typer.echo("")
+            typer.echo(f"[{index}/{len(selected)}] {episode_path}")
+            for tile_index, item in enumerate(video_items, start=1):
+                camera_name = item_metadata(item).get("camera_name")
+                typer.echo(f"  video {tile_index}: {item.uuid} | {camera_name} | {item.name}")
+            for tile_index, item in enumerate(json_items, start=1):
+                typer.echo(f"  json {tile_index}: {item.uuid} | {item.name}")
 
         cameras = set(video_items_by_camera(video_items))
         expected_cameras = {"cam_high", "cam_left_wrist", "cam_right_wrist"}
         if cameras != expected_cameras:
-            typer.echo(f"  skipping: expected cameras {sorted(expected_cameras)}, found {sorted(cameras)}")
-            continue
+            skipped += 1
+            if debug:
+                typer.echo(f"  skipping: expected cameras {sorted(expected_cameras)}, found {sorted(cameras)}")
+        else:
+            try:
+                created_uuid = output_folder.create_data_group(
+                    build_custom_group(episode_path, all_data_folder_id, video_items, json_items)
+                )
+            except Exception as exc:
+                failed += 1
+                if debug:
+                    typer.echo(f"  failed: {type(exc).__name__}: {exc}")
+            else:
+                created += 1
+                if debug:
+                    typer.echo(f"  created: {created_uuid}")
+                if dataset is not None:
+                    dataset.link_items([created_uuid])
+                    if debug:
+                        typer.echo(f"  linked to dataset: {dataset_hash}")
 
-        try:
-            created_uuid = output_folder.create_data_group(
-                build_custom_group(episode_path, all_data_folder_id, video_items, json_items)
-            )
-        except Exception as exc:
-            typer.echo("  Encord rejected this custom carousel group.")
-            typer.echo(f"  {type(exc).__name__}: {exc}")
-            continue
+        if index in marks:
+            percent = marks[index]
+            typer.echo(f"{percent}% done: {created} created, {skipped} skipped, {failed} failed.")
 
-        typer.echo(f"  created: {created_uuid}")
-        if dataset is not None:
-            dataset.link_items([created_uuid])
-            typer.echo(f"  linked to dataset: {dataset_hash}")
+    typer.echo(f"Done: {created} created, {skipped} skipped, {failed} failed.")
 
 
 if __name__ == "__main__":
