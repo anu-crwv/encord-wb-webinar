@@ -185,14 +185,68 @@ def load_raw_items_by_episode(folder: Any, debug: bool = False, debug_limit: int
     return by_episode
 
 
-def group_name(episode_path: str) -> str:
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+CHUNK_RE = re.compile(r"^chunk-\d+$")
+
+
+def source_path(item: Any) -> str:
+    metadata = item_metadata(item)
+    return normalize_source_path(metadata.get("source_key") or metadata.get("source_uri") or getattr(item, "name", ""))
+
+
+def path_parts(value: str) -> list[str]:
+    return [part for part in value.strip("/").split("/") if part]
+
+
+def first_metadata_value(items: list[Any], key: str) -> str | None:
+    for item in items:
+        value = item_metadata(item).get(key)
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def task_name_from_path(episode_path: str) -> str | None:
+    parts = path_parts(episode_path)
+    date_index = next((index for index, part in enumerate(parts) if DATE_RE.match(part)), None)
+    if date_index is not None and date_index >= 3:
+        return parts[date_index - 3]
+    return None
+
+
+def date_from_path(episode_path: str) -> str | None:
+    return next((part for part in path_parts(episode_path) if DATE_RE.match(part)), None)
+
+
+def chunk_from_items(items: list[Any]) -> str | None:
+    for item in items:
+        chunk = next((part for part in path_parts(source_path(item)) if CHUNK_RE.match(part)), None)
+        if chunk:
+            return chunk
+    return None
+
+
+def clean_name_part(value: str) -> str:
+    return re.sub(r"\s+", " ", value.replace("/", "-")).strip()
+
+
+def group_name(episode_path: str, video_items: list[Any]) -> str:
     parts = [part for part in episode_path.rstrip("/").split("/") if part]
-    return f"custom-carousel-{parts[-1] if parts else episode_path}"
+    episode = parts[-1] if parts else episode_path
+    date = (first_metadata_value(video_items, "collection_datetime") or date_from_path(episode_path) or "")[:10]
+    name_parts = [
+        first_metadata_value(video_items, "task_name") or task_name_from_path(episode_path),
+        date or None,
+        episode,
+        chunk_from_items(video_items),
+    ]
+    name = " | ".join(clean_name_part(part) for part in name_parts if part)
+    return name[:120] if name else clean_name_part(episode_path)[:120]
 
 
 def default_output_folder_name() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return f"custom-carousel-output-{timestamp}"
+    return f"data-groups-output-{timestamp}"
 
 
 def video_sort_key(item: Any) -> tuple[int, str]:
@@ -289,7 +343,7 @@ def build_custom_group(episode_path: str, source_folder_id: UUID, video_items: l
     right_side = LayoutGrid(direction="column", split_percentage=50, first=wrist_grid, second=json_carousel)
 
     return DataGroupCustom(
-        name=group_name(episode_path),
+        name=group_name(episode_path, video_items),
         layout_contents=layout_contents,
         layout=LayoutGrid(
             direction="row",
