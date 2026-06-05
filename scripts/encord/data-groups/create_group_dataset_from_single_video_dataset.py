@@ -21,7 +21,7 @@ from uuid import UUID
 import typer
 
 
-DEFAULT_GROUPS_FOLDER = UUID("fae47d1a-0c23-4332-9ab1-9e37e8e44b06")
+DEFAULT_GROUPS_FOLDER = UUID("1fd8f6ec-afd1-47c0-8498-07448a9dc8e9")
 EPISODE_DIR_RE = re.compile(r"^episode_\d+(?:_[A-Za-z0-9]+)?$")
 EPISODE_BASE_RE = re.compile(r"^(episode_\d+)(?:_[A-Za-z0-9]+)?$")
 
