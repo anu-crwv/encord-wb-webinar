@@ -116,11 +116,30 @@ def read_dataset_metadata(client: Any, dataset_hash: str) -> dict[str, dict[str,
             "data_hash": row.uid,
             "data_title": row.title,
             "data_type": str(getattr(row, "data_type", "")),
-            "backing_item_uuid": str(getattr(row, "backing_item_uuid", "")),
+            "encord_storage_item_uuid": str(getattr(row, "backing_item_uuid", "")),
             "client_metadata": getattr(item, "client_metadata", None) or {},
         }
     typer.echo(f"Collected metadata for {len(metadata_by_hash)} data rows.")
     return metadata_by_hash
+
+
+def source_s3_uri(client_meta: dict[str, Any]) -> Any:
+    return client_meta.get("s3_uri") or client_meta.get("source_s3_uri") or client_meta.get("object_url")
+
+
+def source_dataset_items(metadata_by_hash: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    items = []
+    for data_hash, row in sorted(metadata_by_hash.items()):
+        client_meta = row.get("client_metadata") or {}
+        items.append({
+            "data_hash": data_hash,
+            "data_title": row.get("data_title"),
+            "data_type": row.get("data_type"),
+            "encord_storage_item_uuid": row.get("encord_storage_item_uuid"),
+            "source_s3_uri": source_s3_uri(client_meta),
+            "client_metadata": client_meta,
+        })
+    return items
 
 
 def preview_rows(labels: list[dict[str, Any]], metadata_by_hash: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -136,7 +155,7 @@ def preview_rows(labels: list[dict[str, Any]], metadata_by_hash: dict[str, dict[
             "episode_id": client_meta.get("episode_id"),
             "episode_path": client_meta.get("episode_path"),
             "camera_name": client_meta.get("camera_name"),
-            "source_s3_uri": client_meta.get("s3_uri") or client_meta.get("source_s3_uri") or client_meta.get("object_url"),
+            "source_s3_uri": source_s3_uri(client_meta),
         })
     return rows
 
@@ -168,8 +187,8 @@ def log_to_wandb(
 
     source_manifest = output_dir / "source_dataset_manifest.json"
     source_manifest_data = json.loads(source_manifest.read_text())
+    source_items_path = output_dir / "source_dataset_items.json"
     labels_path = output_dir / "encord_labels.json"
-    data_metadata_path = output_dir / "encord_data_metadata.json"
     preview_path = output_dir / "label_preview_rows.json"
 
     with wandb.init(entity=entity, project=project, job_type="encord-label-export") as run:
@@ -193,6 +212,7 @@ def log_to_wandb(
                 description=str(metadata.get("source_dataset_note", "")),
             )
             source_artifact.add_file(str(source_manifest), name="source_dataset_manifest.json")
+            source_artifact.add_file(str(source_items_path), name="source_dataset_items.json")
             logged_source = run.log_artifact(source_artifact, aliases=["latest"])
             logged_source.wait()
             source_ref = f"{source_name}:{logged_source.version}"
@@ -201,7 +221,7 @@ def log_to_wandb(
         typer.echo(f"Logging labels artifact {label_name}...")
         label_artifact = wandb.Artifact(
             label_name,
-            type="dataset",
+            type="labels",
             metadata={
                 "encord_project_hash": source_manifest_data.get("encord_project_hash"),
                 "encord_dataset_hash": source_manifest_data.get("encord_dataset_hash"),
@@ -213,7 +233,6 @@ def log_to_wandb(
             description=str(metadata.get("label_version_note", "")),
         )
         label_artifact.add_file(str(labels_path), name="encord_labels.json")
-        label_artifact.add_file(str(data_metadata_path), name="encord_data_metadata.json")
         label_artifact.add_file(str(preview_path), name="label_preview_rows.json")
         logged_labels = run.log_artifact(label_artifact, aliases=["latest", "single-view"])
         logged_labels.wait()
@@ -247,6 +266,7 @@ def main(
     typer.echo("Exporting labels and source metadata...")
     labels = export_labels(project)
     data_metadata = read_dataset_metadata(client, dataset_hash)
+    dataset_items = source_dataset_items(data_metadata)
     rows = preview_rows(labels, data_metadata)
 
     source_manifest = {
@@ -255,10 +275,13 @@ def main(
         "encord_dataset_hash": dataset_hash,
         "encord_dataset_title": project_dataset.title,
         "exported_at": datetime.now(timezone.utc).isoformat(),
+        "source_item_count": len(dataset_items),
+        "label_row_count": len(labels),
         **metadata,
     }
     typer.echo(f"Writing local export files to {output_dir}...")
     write_json(output_dir / "source_dataset_manifest.json", source_manifest)
+    write_json(output_dir / "source_dataset_items.json", dataset_items)
     write_json(output_dir / "encord_labels.json", {"export_info": source_manifest, "label_rows": labels})
     write_json(output_dir / "encord_data_metadata.json", data_metadata)
     write_json(output_dir / "label_preview_rows.json", rows)

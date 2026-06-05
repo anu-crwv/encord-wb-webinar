@@ -38,6 +38,7 @@ The script finds the project's attached dataset. If the project has zero or mult
 Local files are written under `exports/encord-label-export/<timestamp>/`:
 
 - `source_dataset_manifest.json`
+- `source_dataset_items.json`
 - `encord_labels.json`
 - `encord_data_metadata.json`
 - `label_preview_rows.json`
@@ -45,8 +46,10 @@ Local files are written under `exports/encord-label-export/<timestamp>/`:
 
 W&B receives:
 
-- `encord-source-data:vN`
-- `encord-single-view-labels:vN`
+- `encord-source-data:vN` as a `dataset` artifact, with `source_dataset_manifest.json` and `source_dataset_items.json`
+- `encord-single-view-labels:vN` as a `labels` artifact, with `encord_labels.json` and `label_preview_rows.json`
 - `encord_single_view_labels` preview table
+
+`source_dataset_items.json` is the dataset lineage record. Each item includes the Encord data hash, data title/type, Encord storage item UUID, source S3 URI when present, and full Encord client metadata.
 
 The label export run uses the source dataset artifact, so W&B lineage shows which dataset version produced which label version.
