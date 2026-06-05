@@ -48,7 +48,7 @@ W&B receives:
 
 - `encord-source-data:vN` as a `dataset` artifact, with `source_dataset_manifest.json` and `source_dataset_items.json`
 - `encord-single-view-labels:vN` as a `labels` artifact, with `encord_labels.json` and `label_preview_rows.json`
-- `encord_single_view_labels` preview table
+- `encord_single_view_labels` preview table, including the exported `language_instruction`
 
 `source_dataset_items.json` is the dataset lineage record. Each item includes the Encord data hash, data title/type, Encord storage item UUID, source S3 URI when present, and full Encord client metadata.
 

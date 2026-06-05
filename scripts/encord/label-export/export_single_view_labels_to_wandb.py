@@ -142,6 +142,23 @@ def source_dataset_items(metadata_by_hash: dict[str, dict[str, Any]]) -> list[di
     return items
 
 
+def language_instruction(label: Any) -> Any:
+    if isinstance(label, dict):
+        is_instruction = label.get("value") == "language_instruction" or label.get("name") == "Language Instruction"
+        if is_instruction and "answers" in label:
+            return label.get("answers")
+        for value in label.values():
+            found = language_instruction(value)
+            if found not in (None, ""):
+                return found
+    elif isinstance(label, list):
+        for value in label:
+            found = language_instruction(value)
+            if found not in (None, ""):
+                return found
+    return None
+
+
 def preview_rows(labels: list[dict[str, Any]], metadata_by_hash: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for label in labels:
@@ -152,6 +169,7 @@ def preview_rows(labels: list[dict[str, Any]], metadata_by_hash: dict[str, dict[
             "data_hash": data_hash,
             "data_title": label.get("data_title") or data_meta.get("data_title"),
             "label_hash": label.get("label_hash"),
+            "language_instruction": language_instruction(label),
             "episode_id": client_meta.get("episode_id"),
             "episode_path": client_meta.get("episode_path"),
             "camera_name": client_meta.get("camera_name"),
@@ -240,9 +258,27 @@ def log_to_wandb(
         typer.echo(f"Logged labels artifact {labels_ref}.")
 
         typer.echo("Logging preview table...")
-        table = wandb.Table(columns=["data_hash", "data_title", "label_hash", "episode_id", "episode_path", "camera_name", "source_s3_uri"])
+        table = wandb.Table(columns=[
+            "data_hash",
+            "data_title",
+            "label_hash",
+            "language_instruction",
+            "episode_id",
+            "episode_path",
+            "camera_name",
+            "source_s3_uri",
+        ])
         for row in json.loads(preview_path.read_text()):
-            table.add_data(row.get("data_hash"), row.get("data_title"), row.get("label_hash"), row.get("episode_id"), row.get("episode_path"), row.get("camera_name"), row.get("source_s3_uri"))
+            table.add_data(
+                row.get("data_hash"),
+                row.get("data_title"),
+                row.get("label_hash"),
+                row.get("language_instruction"),
+                row.get("episode_id"),
+                row.get("episode_path"),
+                row.get("camera_name"),
+                row.get("source_s3_uri"),
+            )
         run.log({table_name: table})
         typer.echo("Logged preview table.")
 
