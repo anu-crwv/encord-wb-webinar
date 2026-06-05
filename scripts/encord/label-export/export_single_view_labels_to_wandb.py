@@ -21,8 +21,10 @@ import typer
 import yaml
 
 
-DEFAULT_WANDB_CONFIG = Path("scripts/encord/wandb_config.yaml")
-EXPORT_ROOT = Path("exports/encord-label-export")
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parents[2]
+DEFAULT_WANDB_CONFIG = SCRIPT_DIR.parent / "wandb_config.yaml"
+EXPORT_ROOT = REPO_ROOT / "exports/encord-label-export"
 
 
 def load_yaml(path: Path, label: str) -> dict[str, Any]:
