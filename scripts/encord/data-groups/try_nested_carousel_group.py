@@ -5,7 +5,7 @@
 #     "typer",
 # ]
 # ///
-"""Try nested carousel data groups by matching Encord client metadata."""
+"""Create custom data groups by matching Encord client metadata."""
 
 from __future__ import annotations
 
@@ -195,12 +195,81 @@ def load_group_items(folder: Any, client: Any, debug: bool = False, debug_limit:
 
 def group_name(episode_path: str) -> str:
     parts = [part for part in episode_path.rstrip("/").split("/") if part]
-    return f"nested-carousel-{parts[-1] if parts else episode_path}"
+    return f"custom-carousel-{parts[-1] if parts else episode_path}"
 
 
 def default_output_folder_name() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return f"nested-carousel-output-{timestamp}"
+    return f"custom-carousel-output-{timestamp}"
+
+
+def video_sort_key(item: Any) -> tuple[int, str]:
+    camera_name = str(item_metadata(item).get("camera_name") or "")
+    order = {
+        "cam_high": 0,
+        "cam_left_wrist": 1,
+        "cam_right_wrist": 2,
+    }
+    return order.get(camera_name, 99), str(getattr(item, "name", ""))
+
+
+def group_video_children(group_item: Any, client: Any) -> list[Any]:
+    from encord.orm.storage import StorageItemType
+
+    children = group_layout_children(group_item, client) or list(group_item.get_child_items())
+    videos = [child for child in children if child.item_type == StorageItemType.VIDEO]
+    return sorted(videos, key=video_sort_key)
+
+
+def build_video_grid(video_keys: list[str]) -> Any:
+    from encord.orm.group_layout import DataUnitTile, LayoutGrid
+
+    tiles = [DataUnitTile(key=key) for key in video_keys]
+    if len(tiles) == 1:
+        return tiles[0]
+    if len(tiles) == 2:
+        return LayoutGrid(direction="row", split_percentage=50, first=tiles[0], second=tiles[1])
+    return LayoutGrid(
+        direction="row",
+        split_percentage=34,
+        first=tiles[0],
+        second=LayoutGrid(direction="row", split_percentage=50, first=tiles[1], second=tiles[2]),
+    )
+
+
+def build_custom_group(episode_path: str, group_item: Any, video_items: list[Any], json_items: list[Any]) -> Any:
+    from encord.orm.group_layout import DataUnitCarouselTile, LayoutGrid
+    from encord.orm.storage import DataGroupCustom
+
+    layout_contents: dict[str, UUID] = {}
+
+    video_keys = []
+    for index, item in enumerate(video_items):
+        key = f"video_{index}"
+        layout_contents[key] = item.uuid
+        video_keys.append(key)
+
+    json_keys = []
+    for index, item in enumerate(json_items):
+        key = f"json_{index}"
+        layout_contents[key] = item.uuid
+        json_keys.append(key)
+
+    video_grid = build_video_grid(video_keys)
+    json_carousel = DataUnitCarouselTile(keys=json_keys, carousel_position="bottom", carousel_size=10)
+
+    return DataGroupCustom(
+        name=group_name(episode_path),
+        layout_contents=layout_contents,
+        layout=LayoutGrid(direction="column", split_percentage=75, first=video_grid, second=json_carousel),
+        client_metadata={
+            "probe": "custom-carousel-data-group",
+            "episode_path": episode_path,
+            "source_group_uuid": str(group_item.uuid),
+            "video_uuids": [str(item.uuid) for item in video_items],
+            "json_uuids": [str(item.uuid) for item in json_items],
+        },
+    )
 
 
 def main(
@@ -215,17 +284,13 @@ def main(
     limit: Annotated[int, typer.Option(help="Max matched groups to create unless --no-limit is passed.")] = 5,
     no_limit: Annotated[
         bool,
-        typer.Option("--no-limit", help="Create nested carousel groups for every match."),
+        typer.Option("--no-limit", help="Create custom carousel groups for every match."),
     ] = False,
-    output_folder_name: Annotated[
-        str | None,
-        typer.Option(help="Name for the new output folder. Defaults to nested-carousel-output-<timestamp>."),
-    ] = None,
+    output_folder_name: Annotated[str | None, typer.Option(help="Name for the new output folder.")] = None,
     debug: Annotated[bool, typer.Option("--debug", help="Print capped diagnostics while matching group metadata.")] = False,
     debug_limit: Annotated[int, typer.Option(help="Number of group items to inspect in --debug output.")] = 5,
     dataset_hash: Annotated[UUID | None, typer.Option(help="Optional dataset to link created groups into.")] = None,
 ) -> None:
-    from encord.orm.storage import DataGroupCarousel
 
     client = create_client()
     all_data_folder = client.get_storage_folder(all_data_folder_id)
@@ -242,7 +307,7 @@ def main(
 
     typer.echo(f"Matched {len(matches)} existing groups to JSON metadata items.")
     selected = matches if no_limit else matches[:limit]
-    typer.echo(f"Creating {len(selected)} nested carousel groups.")
+    typer.echo(f"Creating {len(selected)} custom carousel groups.")
     if not selected:
         typer.echo("No matching groups to create. No output folder created.")
         return
@@ -250,9 +315,9 @@ def main(
     output_name = output_folder_name or default_output_folder_name()
     output_folder = client.create_storage_folder(
         name=output_name,
-        description="Nested carousel data group probe output.",
+        description="Custom carousel data group output.",
         client_metadata={
-            "probe": "nested-carousel-data-group-output",
+            "probe": "custom-carousel-data-group-output",
             "all_data_folder_id": str(all_data_folder_id),
             "groups_folder_id": str(groups_folder_id),
             "matched_group_count": len(matches),
@@ -264,28 +329,24 @@ def main(
     dataset = client.get_dataset(dataset_hash) if dataset_hash is not None else None
 
     for index, (episode_path, group_item, json_items) in enumerate(selected, start=1):
-        layout_contents = [group_item.uuid, *[item.uuid for item in json_items]]
+        video_items = group_video_children(group_item, client)
         typer.echo("")
         typer.echo(f"[{index}/{len(selected)}] {episode_path}")
-        typer.echo(f"  tile 1 group: {group_item.uuid} | {group_item.name}")
-        for tile_index, item in enumerate(json_items, start=2):
-            typer.echo(f"  tile {tile_index} json: {item.uuid} | {item.name}")
+        typer.echo(f"  source group: {group_item.uuid} | {group_item.name}")
+        for tile_index, item in enumerate(video_items, start=1):
+            camera_name = item_metadata(item).get("camera_name")
+            typer.echo(f"  video {tile_index}: {item.uuid} | {camera_name} | {item.name}")
+        for tile_index, item in enumerate(json_items, start=1):
+            typer.echo(f"  json {tile_index}: {item.uuid} | {item.name}")
+
+        if len(video_items) != 3:
+            typer.echo(f"  skipping: expected 3 video children, found {len(video_items)}")
+            continue
 
         try:
-            created_uuid = output_folder.create_data_group(
-                DataGroupCarousel(
-                    name=group_name(episode_path),
-                    layout_contents=layout_contents,
-                    client_metadata={
-                        "probe": "nested-carousel-data-group",
-                        "episode_path": episode_path,
-                        "inner_group_uuid": str(group_item.uuid),
-                        "json_uuids": [str(item.uuid) for item in json_items],
-                    },
-                )
-            )
+            created_uuid = output_folder.create_data_group(build_custom_group(episode_path, group_item, video_items, json_items))
         except Exception as exc:
-            typer.echo("  Encord rejected this nested carousel group.")
+            typer.echo("  Encord rejected this custom carousel group.")
             typer.echo(f"  {type(exc).__name__}: {exc}")
             continue
 
