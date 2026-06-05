@@ -10,10 +10,12 @@
 from __future__ import annotations
 
 import os
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlparse
 from uuid import UUID
 
 import typer
@@ -21,6 +23,7 @@ import typer
 
 DEFAULT_ALL_DATA_FOLDER = UUID("cdb6587a-d00b-4446-a3a9-16d2b8babbda")
 DEFAULT_GROUPS_FOLDER = UUID("fae47d1a-0c23-4332-9ab1-9e37e8e44b06")
+EPISODE_DIR_RE = re.compile(r"^episode_\d+(?:_[A-Za-z0-9]+)?$")
 
 
 def create_client():
@@ -51,22 +54,56 @@ def metadata_hint(metadata: dict[str, Any]) -> str:
     return f"keys={keys[:20]} interesting={interesting}"
 
 
-def episode_path_from_item(item: Any, client: Any | None = None, debug: bool = False) -> str | None:
-    metadata = item_metadata(item)
+def normalize_source_path(value: Any) -> str:
+    path = str(value or "")
+    if path.startswith("s3://"):
+        parsed = urlparse(path)
+        return parsed.path.lstrip("/")
+    if path.startswith("http://") or path.startswith("https://"):
+        parsed = urlparse(path)
+        return parsed.path.lstrip("/")
+    return path.lstrip("/")
+
+
+def derive_episode_path_from_source(value: Any) -> str | None:
+    source_path = normalize_source_path(value)
+    parts = [part for part in source_path.split("/") if part]
+    for index, part in enumerate(parts):
+        if EPISODE_DIR_RE.match(part):
+            return "/".join(parts[: index + 1]) + "/"
+    return None
+
+
+def episode_path_from_metadata(metadata: dict[str, Any], fallback_name: Any = None) -> str | None:
     episode_path = metadata.get("episode_path")
     if episode_path:
+        return str(episode_path)
+
+    for key in ["source_key", "source_uri", "objectUrl", "object_url"]:
+        derived = derive_episode_path_from_source(metadata.get(key))
+        if derived:
+            return derived
+
+    return derive_episode_path_from_source(fallback_name)
+
+
+def episode_path_from_item(item: Any, client: Any | None = None, debug: bool = False) -> str | None:
+    metadata = item_metadata(item)
+    episode_path = episode_path_from_metadata(metadata, getattr(item, "name", None))
+    if episode_path:
         if debug:
-            typer.echo(f"    episode_path from item metadata: {episode_path}")
+            typer.echo(f"    episode_path from item metadata/source path: {episode_path}")
         return str(episode_path)
 
     child_items = list(item.get_child_items())
     if debug:
         typer.echo(f"    get_child_items returned {len(child_items)} children.")
     for child in child_items:
-        child_episode_path = item_metadata(child).get("episode_path")
+        child_episode_path = episode_path_from_metadata(item_metadata(child), getattr(child, "name", None))
         if debug:
             typer.echo(f"    child via get_child_items: {child.uuid} | {child.item_type} | {child.name}")
             typer.echo(f"      {metadata_hint(item_metadata(child))}")
+            typer.echo(f"      derived_episode_path={child_episode_path}")
         if child_episode_path:
             return str(child_episode_path)
 
@@ -75,10 +112,11 @@ def episode_path_from_item(item: Any, client: Any | None = None, debug: bool = F
         if debug:
             typer.echo(f"    group layout resolved {len(layout_children)} children.")
         for child in layout_children:
-            child_episode_path = item_metadata(child).get("episode_path")
+            child_episode_path = episode_path_from_metadata(item_metadata(child), getattr(child, "name", None))
             if debug:
                 typer.echo(f"    child via layout: {child.uuid} | {child.item_type} | {child.name}")
                 typer.echo(f"      {metadata_hint(item_metadata(child))}")
+                typer.echo(f"      derived_episode_path={child_episode_path}")
             if child_episode_path:
                 return str(child_episode_path)
 
