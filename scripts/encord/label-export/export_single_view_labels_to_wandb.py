@@ -52,11 +52,14 @@ def create_client():
     key_path = Path(ssh_key_file).expanduser()
     if not key_path.exists():
         raise typer.BadParameter(f"SSH key file does not exist: {key_path}")
+    typer.echo("Connecting to Encord...")
     return EncordUserClient.create_with_ssh_private_key(key_path.read_text())
 
 
 def get_single_project_dataset(client: Any, project_hash: str):
+    typer.echo(f"Loading Encord project {project_hash}...")
     project = client.get_project(project_hash)
+    typer.echo("Finding attached dataset...")
     datasets = list(project.list_datasets())
     if not datasets:
         raise typer.BadParameter(f"Project {project_hash} has no attached datasets.")
@@ -66,16 +69,26 @@ def get_single_project_dataset(client: Any, project_hash: str):
             f"Project {project_hash} has multiple attached datasets: {details}. "
             "This exporter supports exactly one dataset for now."
         )
+    typer.echo(f"Using dataset {datasets[0].dataset_hash} ({datasets[0].title}).")
     return project, datasets[0]
 
 
 def export_labels(project: Any) -> list[dict[str, Any]]:
+    typer.echo("Listing label rows...")
     label_rows = list(project.list_label_rows_v2())
+    typer.echo(f"Found {len(label_rows)} label rows.")
     if label_rows:
+        typer.echo("Initializing labels...")
+        progress_interval = max(1, min(100, len(label_rows) // 10 or 1))
         with project.create_bundle(bundle_size=min(100, len(label_rows))) as bundle:
-            for label_row in label_rows:
+            for index, label_row in enumerate(label_rows, start=1):
                 label_row.initialise_labels(bundle=bundle)
+                if index % progress_interval == 0:
+                    typer.echo(f"Initialized {index}/{len(label_rows)} label rows.")
+        if len(label_rows) % progress_interval:
+            typer.echo(f"Initialized {len(label_rows)} label rows.")
 
+    typer.echo("Serializing labels...")
     labels = []
     for label_row in label_rows:
         row = label_row.to_encord_dict()
@@ -88,9 +101,12 @@ def export_labels(project: Any) -> list[dict[str, Any]]:
 
 
 def read_dataset_metadata(client: Any, dataset_hash: str) -> dict[str, dict[str, Any]]:
+    typer.echo("Loading dataset metadata...")
     dataset = client.get_dataset(dataset_hash)
     data_rows = list(dataset.data_rows)
+    typer.echo(f"Found {len(data_rows)} data rows.")
     backing_ids = [row.backing_item_uuid for row in data_rows if getattr(row, "backing_item_uuid", None)]
+    typer.echo(f"Fetching client metadata for {len(backing_ids)} storage items...")
     storage_items = {str(item.uuid): item for item in client.get_storage_items(backing_ids)} if backing_ids else {}
 
     metadata_by_hash: dict[str, dict[str, Any]] = {}
@@ -103,6 +119,7 @@ def read_dataset_metadata(client: Any, dataset_hash: str) -> dict[str, dict[str,
             "backing_item_uuid": str(getattr(row, "backing_item_uuid", "")),
             "client_metadata": getattr(item, "client_metadata", None) or {},
         }
+    typer.echo(f"Collected metadata for {len(metadata_by_hash)} data rows.")
     return metadata_by_hash
 
 
@@ -156,10 +173,13 @@ def log_to_wandb(
     preview_path = output_dir / "label_preview_rows.json"
 
     with wandb.init(entity=entity, project=project, job_type="encord-label-export") as run:
+        typer.echo(f"Logging to W&B run {run.url}...")
         source_ref = metadata.get("source_artifact_ref")
         if source_ref:
+            typer.echo(f"Using existing source artifact {source_ref}.")
             run.use_artifact(source_ref)
         else:
+            typer.echo(f"Logging source dataset artifact {source_name}...")
             source_artifact = wandb.Artifact(
                 source_name,
                 type="dataset",
@@ -176,7 +196,9 @@ def log_to_wandb(
             logged_source = run.log_artifact(source_artifact, aliases=["latest"])
             logged_source.wait()
             source_ref = f"{source_name}:{logged_source.version}"
+            typer.echo(f"Logged source dataset artifact {source_ref}.")
 
+        typer.echo(f"Logging labels artifact {label_name}...")
         label_artifact = wandb.Artifact(
             label_name,
             type="dataset",
@@ -196,11 +218,14 @@ def log_to_wandb(
         logged_labels = run.log_artifact(label_artifact, aliases=["latest", "single-view"])
         logged_labels.wait()
         labels_ref = f"{label_name}:{logged_labels.version}"
+        typer.echo(f"Logged labels artifact {labels_ref}.")
 
+        typer.echo("Logging preview table...")
         table = wandb.Table(columns=["data_hash", "data_title", "label_hash", "episode_id", "episode_path", "camera_name", "source_s3_uri"])
         for row in json.loads(preview_path.read_text()):
             table.add_data(row.get("data_hash"), row.get("data_title"), row.get("label_hash"), row.get("episode_id"), row.get("episode_path"), row.get("camera_name"), row.get("source_s3_uri"))
         run.log({table_name: table})
+        typer.echo("Logged preview table.")
 
         return {"source_dataset_artifact": source_ref, "labels_artifact": labels_ref, "run_url": run.url}
 
@@ -209,6 +234,7 @@ def main(
     metadata_yaml: Annotated[Path, typer.Option(help="Required YAML notes for this dataset/label version.")],
     wandb_config: Annotated[Path, typer.Option(help="W&B config YAML.")] = DEFAULT_WANDB_CONFIG,
 ) -> None:
+    typer.echo("Loading config...")
     metadata = load_yaml(metadata_yaml, "metadata YAML")
     wandb_settings = load_yaml(wandb_config, "W&B config")
     project_hash = str(required(metadata, "encord_project_hash", "metadata YAML"))
@@ -218,6 +244,7 @@ def main(
     dataset_hash = str(project_dataset.dataset_hash)
 
     output_dir = make_output_dir()
+    typer.echo("Exporting labels and source metadata...")
     labels = export_labels(project)
     data_metadata = read_dataset_metadata(client, dataset_hash)
     rows = preview_rows(labels, data_metadata)
@@ -230,10 +257,12 @@ def main(
         "exported_at": datetime.now(timezone.utc).isoformat(),
         **metadata,
     }
+    typer.echo(f"Writing local export files to {output_dir}...")
     write_json(output_dir / "source_dataset_manifest.json", source_manifest)
     write_json(output_dir / "encord_labels.json", {"export_info": source_manifest, "label_rows": labels})
     write_json(output_dir / "encord_data_metadata.json", data_metadata)
     write_json(output_dir / "label_preview_rows.json", rows)
+    typer.echo("Wrote local export files.")
 
     lineage = log_to_wandb(wandb_config=wandb_settings, metadata=metadata, output_dir=output_dir)
     write_json(output_dir / "wandb_lineage.json", lineage)
