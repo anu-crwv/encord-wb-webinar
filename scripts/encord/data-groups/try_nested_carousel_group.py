@@ -41,7 +41,7 @@ def item_metadata(item: Any) -> dict[str, Any]:
     return getattr(item, "client_metadata", None) or {}
 
 
-def episode_path_from_item(item: Any) -> str | None:
+def episode_path_from_item(item: Any, client: Any | None = None) -> str | None:
     metadata = item_metadata(item)
     episode_path = metadata.get("episode_path")
     if episode_path:
@@ -52,7 +52,27 @@ def episode_path_from_item(item: Any) -> str | None:
         if child_episode_path:
             return str(child_episode_path)
 
+    if client is not None:
+        for child in group_layout_children(item, client):
+            child_episode_path = item_metadata(child).get("episode_path")
+            if child_episode_path:
+                return str(child_episode_path)
+
     return None
+
+
+def group_layout_children(item: Any, client: Any) -> list[Any]:
+    try:
+        data_group = item.get_summary().data_group
+    except Exception:
+        return []
+    if data_group is None:
+        return []
+
+    child_uuids = [child.uuid for child in data_group.layout_contents.values()]
+    if not child_uuids:
+        return []
+    return client.get_storage_items(child_uuids)
 
 
 def is_json_metadata_item(item: Any) -> bool:
@@ -77,16 +97,19 @@ def load_json_items_by_episode(folder: Any) -> dict[str, list[Any]]:
     return by_episode
 
 
-def load_group_items(folder: Any) -> list[tuple[str, Any]]:
+def load_group_items(folder: Any, client: Any) -> list[tuple[str, Any]]:
     from encord.orm.storage import StorageItemType
 
     groups = []
+    scanned = 0
     typer.echo(f"Scanning groups folder {folder.uuid} for existing video groups...")
     for item in folder.list_items(page_size=1000, item_types=[StorageItemType.GROUP]):
-        episode_path = episode_path_from_item(item)
+        scanned += 1
+        episode_path = episode_path_from_item(item, client)
         if episode_path:
             groups.append((episode_path, item))
-    typer.echo(f"Found {len(groups)} groups with episode_path metadata.")
+    typer.echo(f"Scanned {scanned} group items.")
+    typer.echo(f"Found {len(groups)} groups with episode_path from group or child file metadata.")
     return groups
 
 
@@ -127,7 +150,7 @@ def main(
     groups_folder = client.get_storage_folder(groups_folder_id)
 
     json_by_episode = load_json_items_by_episode(all_data_folder)
-    group_items = load_group_items(groups_folder)
+    group_items = load_group_items(groups_folder, client)
 
     matches = []
     for episode_path, group_item in group_items:
