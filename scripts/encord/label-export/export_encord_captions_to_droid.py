@@ -15,7 +15,7 @@ import json
 import os
 from pathlib import Path
 import shutil
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -262,7 +262,7 @@ def source_video_path(episode: Episode, video_key: str) -> Path:
     )
 
 
-def choose_video_sources(episode: Episode, single_view_policy: str) -> dict[str, str]:
+def choose_video_sources(episode: Episode) -> dict[str, str]:
     available = [key for key in episode.video_keys if source_video_path(episode, key).exists()]
     mapped = {
         SOURCE_TO_DROID.get(key, key): key
@@ -271,13 +271,10 @@ def choose_video_sources(episode: Episode, single_view_policy: str) -> dict[str,
     if all(key in mapped for key in DROID_VIDEO_KEYS):
         return {key: mapped[key] for key in DROID_VIDEO_KEYS}
 
-    if len(available) == 1 and single_view_policy == "duplicate":
-        return {key: available[0] for key in DROID_VIDEO_KEYS}
-    if single_view_policy == "keep":
-        return mapped
+    missing = [key for key in DROID_VIDEO_KEYS if key not in mapped]
     raise typer.BadParameter(
-        f"Episode {episode.root.name}/{episode.index} has {len(available)} available view(s). "
-        "Use --single-view-policy duplicate to create a 3-view-compatible export, or train a single-view config."
+        f"Episode {episode.root.name}/{episode.index} is missing train-time views: {', '.join(missing)}. "
+        "Single-view captioning experiments are fine for annotation QA, but DROID training export requires all three views."
     )
 
 
@@ -285,13 +282,12 @@ def copy_videos(
     episode: Episode,
     output_root: Path,
     new_index: int,
-    single_view_policy: str,
     overwrite: bool,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     features = episode.info.get("features") or {}
     output_features: dict[str, dict[str, Any]] = {}
     copy_plan: list[dict[str, Any]] = []
-    for dest_key, source_key in choose_video_sources(episode, single_view_policy).items():
+    for dest_key, source_key in choose_video_sources(episode).items():
         source_path = source_video_path(episode, source_key)
         dest_path = output_root / f"videos/chunk-{new_index // 1000:03d}/{dest_key}/episode_{new_index:06d}.mp4"
         if dest_path.exists() and not overwrite:
@@ -302,7 +298,6 @@ def copy_videos(
         copy_plan.append({
             "source_key": source_key,
             "output_key": dest_key,
-            "duplicated": SOURCE_TO_DROID.get(source_key, source_key) != dest_key,
         })
     return output_features, copy_plan
 
@@ -335,7 +330,7 @@ def write_metadata(
         meta / "episodes.jsonl": "".join(json.dumps(row) + "\n" for row in episodes),
         output_root / "encord_droid_export_manifest.json": json.dumps({
             "video_copy_plan": copy_plan,
-            "single_view_note": "Duplicated views mean the source data had fewer views than the DROID-shaped output.",
+            "training_view_policy": "Requires all three DROID video views; single-view exports are rejected.",
         }, indent=2) + "\n",
     }
 
@@ -395,10 +390,6 @@ def main(
     project_hash: Annotated[str | None, typer.Option(help="Encord project hash. Uses ENCORD_SSH_KEY_FILE.")] = None,
     labels_json: Annotated[Path | None, typer.Option(help="Local label JSON for testing/offline export.")] = None,
     include_unmatched: Annotated[bool, typer.Option(help="Also export episodes with no matched caption as 'not provided'.")] = False,
-    single_view_policy: Annotated[
-        Literal["duplicate", "keep", "error"],
-        typer.Option(help="What to do when source data has only one view."),
-    ] = "duplicate",
     overwrite: Annotated[bool, typer.Option(help="Overwrite output parquet/video files.")] = False,
 ) -> None:
     captions = captions_from_rows(load_label_rows(labels_json, project_hash))
@@ -420,6 +411,8 @@ def main(
             selected.append((episode, caption))
     if not selected:
         raise typer.BadParameter("No source episodes matched caption rows.")
+    for episode, _ in selected:
+        choose_video_sources(episode)
 
     for new_index, (episode, caption) in enumerate(selected):
         text = caption.text if caption else "not provided"
@@ -434,7 +427,7 @@ def main(
         if first_table is None:
             first_table = pq.read_table(parquet_path)
 
-        video_features, copy_plan = copy_videos(episode, output_dir, new_index, single_view_policy, overwrite)
+        video_features, copy_plan = copy_videos(episode, output_dir, new_index, overwrite)
         output_video_features.update(video_features)
         video_copy_plan.extend({"episode_index": new_index, **row} for row in copy_plan)
         output_episode_rows.append({
