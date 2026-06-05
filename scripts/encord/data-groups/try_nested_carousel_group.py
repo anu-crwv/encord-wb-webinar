@@ -41,38 +41,73 @@ def item_metadata(item: Any) -> dict[str, Any]:
     return getattr(item, "client_metadata", None) or {}
 
 
-def episode_path_from_item(item: Any, client: Any | None = None) -> str | None:
+def metadata_hint(metadata: dict[str, Any]) -> str:
+    keys = sorted(metadata.keys())
+    interesting = {
+        key: metadata.get(key)
+        for key in ["episode_path", "episode_id", "source_key", "source_uri", "camera_name", "sensor_key", "file_ext"]
+        if key in metadata
+    }
+    return f"keys={keys[:20]} interesting={interesting}"
+
+
+def episode_path_from_item(item: Any, client: Any | None = None, debug: bool = False) -> str | None:
     metadata = item_metadata(item)
     episode_path = metadata.get("episode_path")
     if episode_path:
+        if debug:
+            typer.echo(f"    episode_path from item metadata: {episode_path}")
         return str(episode_path)
 
-    for child in item.get_child_items():
+    child_items = list(item.get_child_items())
+    if debug:
+        typer.echo(f"    get_child_items returned {len(child_items)} children.")
+    for child in child_items:
         child_episode_path = item_metadata(child).get("episode_path")
+        if debug:
+            typer.echo(f"    child via get_child_items: {child.uuid} | {child.item_type} | {child.name}")
+            typer.echo(f"      {metadata_hint(item_metadata(child))}")
         if child_episode_path:
             return str(child_episode_path)
 
     if client is not None:
-        for child in group_layout_children(item, client):
+        layout_children = group_layout_children(item, client, debug=debug)
+        if debug:
+            typer.echo(f"    group layout resolved {len(layout_children)} children.")
+        for child in layout_children:
             child_episode_path = item_metadata(child).get("episode_path")
+            if debug:
+                typer.echo(f"    child via layout: {child.uuid} | {child.item_type} | {child.name}")
+                typer.echo(f"      {metadata_hint(item_metadata(child))}")
             if child_episode_path:
                 return str(child_episode_path)
 
     return None
 
 
-def group_layout_children(item: Any, client: Any) -> list[Any]:
+def group_layout_children(item: Any, client: Any, debug: bool = False) -> list[Any]:
     try:
         data_group = item.get_summary().data_group
-    except Exception:
+    except Exception as exc:
+        if debug:
+            typer.echo(f"    get_summary failed: {type(exc).__name__}: {exc}")
         return []
     if data_group is None:
+        if debug:
+            typer.echo("    summary has no data_group layout.")
         return []
 
     child_uuids = [child.uuid for child in data_group.layout_contents.values()]
+    if debug:
+        typer.echo(f"    layout child UUIDs: {[str(child_uuid) for child_uuid in child_uuids]}")
     if not child_uuids:
         return []
-    return client.get_storage_items(child_uuids)
+    try:
+        return client.get_storage_items(child_uuids)
+    except Exception as exc:
+        if debug:
+            typer.echo(f"    get_storage_items failed: {type(exc).__name__}: {exc}")
+        return []
 
 
 def is_json_metadata_item(item: Any) -> bool:
@@ -97,7 +132,7 @@ def load_json_items_by_episode(folder: Any) -> dict[str, list[Any]]:
     return by_episode
 
 
-def load_group_items(folder: Any, client: Any) -> list[tuple[str, Any]]:
+def load_group_items(folder: Any, client: Any, debug: bool = False, debug_limit: int = 5) -> list[tuple[str, Any]]:
     from encord.orm.storage import StorageItemType
 
     groups = []
@@ -105,7 +140,14 @@ def load_group_items(folder: Any, client: Any) -> list[tuple[str, Any]]:
     typer.echo(f"Scanning groups folder {folder.uuid} for existing video groups...")
     for item in folder.list_items(page_size=1000, item_types=[StorageItemType.GROUP]):
         scanned += 1
-        episode_path = episode_path_from_item(item, client)
+        item_debug = debug and scanned <= debug_limit
+        if item_debug:
+            typer.echo("")
+            typer.echo(f"  Debug group {scanned}: {item.uuid} | {item.item_type} | {item.name}")
+            typer.echo(f"    group metadata: {metadata_hint(item_metadata(item))}")
+        episode_path = episode_path_from_item(item, client, debug=item_debug)
+        if item_debug:
+            typer.echo(f"    resolved episode_path: {episode_path}")
         if episode_path:
             groups.append((episode_path, item))
     typer.echo(f"Scanned {scanned} group items.")
@@ -141,6 +183,8 @@ def main(
         str | None,
         typer.Option(help="Name for the new output folder. Defaults to nested-carousel-output-<timestamp>."),
     ] = None,
+    debug: Annotated[bool, typer.Option("--debug", help="Print capped diagnostics while matching group metadata.")] = False,
+    debug_limit: Annotated[int, typer.Option(help="Number of group items to inspect in --debug output.")] = 5,
     dataset_hash: Annotated[UUID | None, typer.Option(help="Optional dataset to link created groups into.")] = None,
 ) -> None:
     from encord.orm.storage import DataGroupCarousel
@@ -150,7 +194,7 @@ def main(
     groups_folder = client.get_storage_folder(groups_folder_id)
 
     json_by_episode = load_json_items_by_episode(all_data_folder)
-    group_items = load_group_items(groups_folder, client)
+    group_items = load_group_items(groups_folder, client, debug=debug, debug_limit=debug_limit)
 
     matches = []
     for episode_path, group_item in group_items:
