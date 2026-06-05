@@ -1,0 +1,5 @@
+entity: encord-wb-physical-ai
+project: wam-finetune-webinar
+source_artifact_name: encord-source-data
+label_artifact_name: encord-single-view-labels
+table_name: encord_single_view_labels
