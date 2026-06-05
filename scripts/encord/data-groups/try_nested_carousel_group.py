@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
@@ -94,6 +95,11 @@ def group_name(episode_path: str) -> str:
     return f"nested-carousel-{parts[-1] if parts else episode_path}"
 
 
+def default_output_folder_name() -> str:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"nested-carousel-output-{timestamp}"
+
+
 def main(
     all_data_folder_id: Annotated[
         UUID,
@@ -103,11 +109,15 @@ def main(
         UUID,
         typer.Option(help="Folder containing the existing grouped 3-camera video data groups."),
     ] = DEFAULT_GROUPS_FOLDER,
-    limit: Annotated[int, typer.Option(help="Max matched groups to try. Use 0 for all.")] = 5,
-    dry_run: Annotated[
+    limit: Annotated[int, typer.Option(help="Max matched groups to create unless --no-limit is passed.")] = 5,
+    no_limit: Annotated[
         bool,
-        typer.Option("--dry-run/--no-dry-run", help="Preview matches only unless --no-dry-run is passed."),
-    ] = True,
+        typer.Option("--no-limit", help="Create nested carousel groups for every match."),
+    ] = False,
+    output_folder_name: Annotated[
+        str | None,
+        typer.Option(help="Name for the new output folder. Defaults to nested-carousel-output-<timestamp>."),
+    ] = None,
     dataset_hash: Annotated[UUID | None, typer.Option(help="Optional dataset to link created groups into.")] = None,
 ) -> None:
     from encord.orm.storage import DataGroupCarousel
@@ -126,10 +136,27 @@ def main(
             matches.append((episode_path, group_item, json_items))
 
     typer.echo(f"Matched {len(matches)} existing groups to JSON metadata items.")
-    selected = matches if limit == 0 else matches[:limit]
-    typer.echo(f"{'Dry-running' if dry_run else 'Creating'} {len(selected)} nested carousel groups.")
+    selected = matches if no_limit else matches[:limit]
+    typer.echo(f"Creating {len(selected)} nested carousel groups.")
+    if not selected:
+        typer.echo("No matching groups to create. No output folder created.")
+        return
 
-    dataset = client.get_dataset(dataset_hash) if dataset_hash is not None and not dry_run else None
+    output_name = output_folder_name or default_output_folder_name()
+    output_folder = client.create_storage_folder(
+        name=output_name,
+        description="Nested carousel data group probe output.",
+        client_metadata={
+            "probe": "nested-carousel-data-group-output",
+            "all_data_folder_id": str(all_data_folder_id),
+            "groups_folder_id": str(groups_folder_id),
+            "matched_group_count": len(matches),
+            "created_group_limit": None if no_limit else limit,
+        },
+    )
+    typer.echo(f"Output folder: {output_folder.uuid} | {output_folder.name}")
+
+    dataset = client.get_dataset(dataset_hash) if dataset_hash is not None else None
 
     for index, (episode_path, group_item, json_items) in enumerate(selected, start=1):
         layout_contents = [group_item.uuid, *[item.uuid for item in json_items]]
@@ -139,11 +166,8 @@ def main(
         for tile_index, item in enumerate(json_items, start=2):
             typer.echo(f"  tile {tile_index} json: {item.uuid} | {item.name}")
 
-        if dry_run:
-            continue
-
         try:
-            created_uuid = groups_folder.create_data_group(
+            created_uuid = output_folder.create_data_group(
                 DataGroupCarousel(
                     name=group_name(episode_path),
                     layout_contents=layout_contents,
