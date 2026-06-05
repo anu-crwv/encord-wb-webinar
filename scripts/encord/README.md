@@ -18,6 +18,25 @@ dataset/.../videos/...
 
 It should also log source lineage: Encord dataset hash, data group UUIDs, video storage item UUIDs, S3 paths, and client metadata.
 
+Run:
+
+```bash
+export ENCORD_SSH_KEY_FILE=/path/to/encord_ssh_private_key
+
+uv run --script scripts/encord/dataset-export/export_encord_dataset_to_wandb.py \
+  --dataset-hash <encord_dataset_hash> \
+  --limit 3 \
+  --alias v0
+```
+
+The script writes local files under `exports/encord-dataset-export/<timestamp>/` and logs `encord-source-data:vN` to W&B. Inside the artifact, videos are stored at:
+
+```text
+dataset/videos/chunk-000/observation.images.exterior_image_1_left/episode_000000.mp4
+dataset/videos/chunk-000/observation.images.wrist_image_left/episode_000000.mp4
+dataset/videos/chunk-000/observation.images.wrist_image_right/episode_000000.mp4
+```
+
 ## Labels Artifact
 
 The labels artifact versions label/caption/metadata trials.
