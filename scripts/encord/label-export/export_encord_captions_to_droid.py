@@ -262,20 +262,19 @@ def source_video_path(episode: Episode, video_key: str) -> Path:
     )
 
 
+def missing_droid_views(video_sources: dict[str, str]) -> list[str]:
+    return [key for key in DROID_VIDEO_KEYS if key not in video_sources]
+
+
 def choose_video_sources(episode: Episode) -> dict[str, str]:
     available = [key for key in episode.video_keys if source_video_path(episode, key).exists()]
     mapped = {
         SOURCE_TO_DROID.get(key, key): key
         for key in available
     }
-    if all(key in mapped for key in DROID_VIDEO_KEYS):
-        return {key: mapped[key] for key in DROID_VIDEO_KEYS}
-
-    missing = [key for key in DROID_VIDEO_KEYS if key not in mapped]
-    raise typer.BadParameter(
-        f"Episode {episode.root.name}/{episode.index} is missing train-time views: {', '.join(missing)}. "
-        "Single-view captioning experiments are fine for annotation QA, but DROID training export requires all three views."
-    )
+    ordered = {key: mapped[key] for key in DROID_VIDEO_KEYS if key in mapped}
+    ordered.update({key: value for key, value in mapped.items() if key not in ordered})
+    return ordered
 
 
 def copy_videos(
@@ -320,6 +319,8 @@ def write_metadata(
     video_features: dict[str, dict[str, Any]],
     first_table: pa.Table,
     copy_plan: list[dict[str, Any]],
+    training_ready: bool,
+    missing_views: list[dict[str, Any]],
 ) -> list[str]:
     written: list[str] = []
     meta = output_root / "meta"
@@ -329,20 +330,31 @@ def write_metadata(
         meta / "tasks.jsonl": "".join(json.dumps(row) + "\n" for row in tasks),
         meta / "episodes.jsonl": "".join(json.dumps(row) + "\n" for row in episodes),
         output_root / "encord_droid_export_manifest.json": json.dumps({
+            "training_ready": training_ready,
+            "caption_export_only": not training_ready,
+            "required_droid_video_keys": DROID_VIDEO_KEYS,
+            "missing_train_time_views": missing_views,
             "video_copy_plan": copy_plan,
-            "training_view_policy": "Requires all three DROID video views; single-view exports are rejected.",
+            "training_view_policy": "Trainable exports require all three DROID video views. Partial-view exports are for caption QA/versioning only.",
         }, indent=2) + "\n",
     }
+    if not training_ready:
+        files[output_root / "NOT_TRAINABLE.md"] = (
+            "# Not Trainable\n\n"
+            "This export is for caption QA/versioning only because at least one episode is missing required DROID video views.\n"
+        )
 
     info = dict(source_info)
     info.update({
         "total_episodes": len(episodes),
         "total_frames": int(sum(row["length"] for row in episodes)),
         "total_tasks": len(tasks),
-        "total_videos": len(episodes) * len(video_features),
+        "total_videos": len(copy_plan),
         "total_chunks": (len(episodes) // 1000) + (1 if len(episodes) % 1000 else 0),
         "chunks_size": 1000,
-        "splits": {"train": f"0:{len(episodes)}"},
+        "splits": {"train": f"0:{len(episodes)}"} if training_ready else {"caption_qc": f"0:{len(episodes)}"},
+        "training_ready": training_ready,
+        "caption_export_only": not training_ready,
         "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
         "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
     })
@@ -401,6 +413,8 @@ def main(
     output_episode_rows: list[dict[str, Any]] = []
     output_video_features: dict[str, dict[str, Any]] = {}
     video_copy_plan: list[dict[str, Any]] = []
+    missing_views: list[dict[str, Any]] = []
+    video_sources_by_episode: dict[tuple[str, int], dict[str, str]] = {}
     first_table: pa.Table | None = None
     total_frames = 0
 
@@ -412,7 +426,16 @@ def main(
     if not selected:
         raise typer.BadParameter("No source episodes matched caption rows.")
     for episode, _ in selected:
-        choose_video_sources(episode)
+        video_sources = choose_video_sources(episode)
+        video_sources_by_episode[(episode.root.as_posix(), episode.index)] = video_sources
+        missing = missing_droid_views(video_sources)
+        if missing:
+            missing_views.append({
+                "source_dataset": episode.root.name,
+                "source_episode_index": episode.index,
+                "missing_video_keys": missing,
+            })
+    training_ready = not missing_views
 
     for new_index, (episode, caption) in enumerate(selected):
         text = caption.text if caption else "not provided"
@@ -430,6 +453,7 @@ def main(
         video_features, copy_plan = copy_videos(episode, output_dir, new_index, overwrite)
         output_video_features.update(video_features)
         video_copy_plan.extend({"episode_index": new_index, **row} for row in copy_plan)
+        missing = missing_droid_views(video_sources_by_episode[(episode.root.as_posix(), episode.index)])
         output_episode_rows.append({
             "episode_index": new_index,
             "tasks": [] if text == "not provided" else [text],
@@ -437,6 +461,8 @@ def main(
             "source_dataset": episode.root.name,
             "source_episode_index": episode.index,
             "caption_matched": caption is not None,
+            "training_ready": not missing,
+            "missing_train_time_views": missing,
         })
 
     tasks = [
@@ -452,8 +478,11 @@ def main(
         output_video_features,
         first_table,
         video_copy_plan,
+        training_ready,
+        missing_views,
     )
     typer.echo(f"Exported {len(output_episode_rows)} episodes to {output_dir}")
+    typer.echo(f"Training ready: {'yes' if training_ready else 'no (caption QA/versioning export only)'}")
     typer.echo(f"Metadata written: {', '.join(written) if written else 'none'}")
 
 
