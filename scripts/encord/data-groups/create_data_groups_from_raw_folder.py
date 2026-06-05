@@ -23,7 +23,9 @@ import typer
 
 
 DEFAULT_ALL_DATA_FOLDER = UUID("cdb6587a-d00b-4446-a3a9-16d2b8babbda")
+DEFAULT_OUTPUT_FOLDER = UUID("1fd8f6ec-afd1-47c0-8498-07448a9dc8e9")
 EPISODE_DIR_RE = re.compile(r"^episode_\d+(?:_[A-Za-z0-9]+)?$")
+CAMERA_NAMES = {"cam_high", "cam_left_wrist", "cam_right_wrist"}
 
 
 def create_client():
@@ -257,7 +259,7 @@ def progress_points(total: int) -> dict[int, int]:
 
 
 def video_sort_key(item: Any) -> tuple[int, str]:
-    camera_name = str(item_metadata(item).get("camera_name") or "")
+    camera_name = camera_name_from_item(item) or ""
     order = {
         "cam_high": 0,
         "cam_left_wrist": 1,
@@ -267,7 +269,38 @@ def video_sort_key(item: Any) -> tuple[int, str]:
 
 
 def video_items_by_camera(video_items: list[Any]) -> dict[str, Any]:
-    return {str(item_metadata(item).get("camera_name") or ""): item for item in video_items}
+    return {camera_name_from_item(item) or "": item for item in video_items}
+
+
+def camera_name_from_item(item: Any) -> str | None:
+    metadata = item_metadata(item)
+    camera_name = metadata.get("camera_name")
+    if camera_name:
+        return str(camera_name)
+
+    sensor_key = str(metadata.get("sensor_key") or "")
+    if sensor_key:
+        candidate = sensor_key.rsplit(".", 1)[-1]
+        if candidate in CAMERA_NAMES:
+            return candidate
+
+    parts = path_parts(source_path(item))
+    for part in parts:
+        candidate = part.rsplit(".", 1)[-1]
+        if candidate in CAMERA_NAMES:
+            return candidate
+    return None
+
+
+def existing_episode_paths(folder: Any, client: Any) -> set[str]:
+    from encord.orm.storage import StorageItemType
+
+    paths = set()
+    for item in folder.list_items(page_size=1000, item_types=[StorageItemType.GROUP]):
+        episode_path = episode_path_from_item(item, client=client)
+        if episode_path:
+            paths.add(episode_path)
+    return paths
 
 
 def sanitize_layout_key(value: str) -> str:
@@ -379,6 +412,10 @@ def main(
         typer.Option("--no-limit", help="Create data groups for every match."),
     ] = False,
     output_folder_name: Annotated[str | None, typer.Option(help="Name for the new output folder.")] = None,
+    output_folder_id: Annotated[
+        UUID,
+        typer.Option(help="Existing folder to upsert into when --output-folder-name is not set."),
+    ] = DEFAULT_OUTPUT_FOLDER,
     debug: Annotated[bool, typer.Option("--debug", help="Print capped diagnostics while matching raw items.")] = False,
     debug_limit: Annotated[int, typer.Option(help="Number of raw items to inspect in --debug output.")] = 5,
     dataset_hash: Annotated[UUID | None, typer.Option(help="Optional dataset to link created groups into.")] = None,
@@ -393,23 +430,31 @@ def main(
         if items["videos"] and items["jsons"]:
             matches.append((episode_path, sorted(items["videos"], key=video_sort_key), items["jsons"]))
 
-    selected = matches if no_limit else matches[:limit]
-    typer.echo(f"Matched {len(matches)} episodes. Creating {len(selected)} data groups.")
+    if output_folder_name:
+        output_folder = client.create_storage_folder(
+            name=output_folder_name or default_output_folder_name(),
+            description="Data groups with 3 camera videos and metadata carousel.",
+            client_metadata={
+                "probe": "data-groups-with-metadata-output",
+                "all_data_folder_id": str(all_data_folder_id),
+                "matched_episode_count": len(matches),
+                "created_group_limit": None if no_limit else limit,
+            },
+        )
+        existing_paths = set()
+    else:
+        output_folder = client.get_storage_folder(output_folder_id)
+        existing_paths = existing_episode_paths(output_folder, client)
+
+    missing_matches = [match for match in matches if match[0] not in existing_paths]
+    selected = missing_matches if no_limit else missing_matches[:limit]
+    typer.echo(
+        f"Matched {len(matches)} episodes. Existing: {len(existing_paths)}. Creating: {len(selected)}."
+    )
     if not selected:
-        typer.echo("No output folder created.")
+        typer.echo("Nothing to create.")
         return
 
-    output_name = output_folder_name or default_output_folder_name()
-    output_folder = client.create_storage_folder(
-        name=output_name,
-        description="Data groups with 3 camera videos and metadata carousel.",
-        client_metadata={
-            "probe": "data-groups-with-metadata-output",
-            "all_data_folder_id": str(all_data_folder_id),
-            "matched_episode_count": len(matches),
-            "created_group_limit": None if no_limit else limit,
-        },
-    )
     typer.echo(f"Output folder: {output_folder.uuid} | {output_folder.name}")
 
     dataset = client.get_dataset(dataset_hash) if dataset_hash is not None else None
@@ -423,7 +468,7 @@ def main(
             typer.echo("")
             typer.echo(f"[{index}/{len(selected)}] {episode_path}")
             for tile_index, item in enumerate(video_items, start=1):
-                camera_name = item_metadata(item).get("camera_name")
+                camera_name = camera_name_from_item(item)
                 typer.echo(f"  video {tile_index}: {item.uuid} | {camera_name} | {item.name}")
             for tile_index, item in enumerate(json_items, start=1):
                 typer.echo(f"  json {tile_index}: {item.uuid} | {item.name}")
