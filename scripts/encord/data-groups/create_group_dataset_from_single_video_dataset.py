@@ -121,7 +121,18 @@ def episode_path_from_item(item: Any) -> str | None:
     return episode_path_from_metadata(item_metadata(item), getattr(item, "name", None))
 
 
-def episode_keys_from_item(item: Any, client: Any | None = None, debug: bool = False) -> list[str]:
+def is_video_item(item: Any) -> bool:
+    from encord.orm.storage import StorageItemType
+
+    return item.item_type == StorageItemType.VIDEO
+
+
+def episode_keys_from_item(
+    item: Any,
+    client: Any | None = None,
+    debug: bool = False,
+    video_children_only: bool = False,
+) -> list[str]:
     metadata = item_metadata(item)
     keys = episode_keys_from_metadata(metadata, getattr(item, "name", None))
     if keys:
@@ -130,6 +141,8 @@ def episode_keys_from_item(item: Any, client: Any | None = None, debug: bool = F
         return keys
 
     child_items = list(item.get_child_items())
+    if video_children_only:
+        child_items = [child for child in child_items if is_video_item(child)]
     if debug:
         typer.echo(f"    get_child_items returned {len(child_items)} children.")
     for child in child_items:
@@ -143,6 +156,8 @@ def episode_keys_from_item(item: Any, client: Any | None = None, debug: bool = F
 
     if client is not None:
         layout_children = group_layout_children(item, client, debug=debug)
+        if video_children_only:
+            layout_children = [child for child in layout_children if is_video_item(child)]
         if debug:
             typer.echo(f"    group layout resolved {len(layout_children)} children.")
         for child in layout_children:
@@ -196,7 +211,7 @@ def load_group_by_episode(folder: Any, client: Any, debug: bool = False, debug_l
             typer.echo("")
             typer.echo(f"  Debug group {scanned}: {group_item.uuid} | {group_item.item_type} | {group_item.name}")
             typer.echo(f"    group metadata: {metadata_hint(item_metadata(group_item))}")
-        keys = episode_keys_from_item(group_item, client, debug=item_debug)
+        keys = episode_keys_from_item(group_item, client, debug=item_debug, video_children_only=True)
         if item_debug:
             typer.echo(f"    resolved keys: {keys}")
         for key in keys:

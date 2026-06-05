@@ -5,7 +5,7 @@
 #     "typer",
 # ]
 # ///
-"""Create custom data groups by matching Encord client metadata."""
+"""Create custom data groups from raw Encord video and metadata items."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ import typer
 
 
 DEFAULT_ALL_DATA_FOLDER = UUID("cdb6587a-d00b-4446-a3a9-16d2b8babbda")
-DEFAULT_GROUPS_FOLDER = UUID("fae47d1a-0c23-4332-9ab1-9e37e8e44b06")
 EPISODE_DIR_RE = re.compile(r"^episode_\d+(?:_[A-Za-z0-9]+)?$")
 
 
@@ -157,40 +156,33 @@ def is_json_metadata_item(item: Any) -> bool:
     return file_ext in {".json", ".jsonl"} or role != "none"
 
 
-def load_json_items_by_episode(folder: Any) -> dict[str, list[Any]]:
+def load_raw_items_by_episode(folder: Any, debug: bool = False, debug_limit: int = 5) -> dict[str, dict[str, list[Any]]]:
     from encord.orm.storage import StorageItemType
 
-    by_episode: dict[str, list[Any]] = defaultdict(list)
-    typer.echo(f"Scanning all-data folder {folder.uuid} for JSON metadata items...")
-    for item in folder.list_items(page_size=1000, item_types=[StorageItemType.PLAIN_TEXT]):
-        episode_path = episode_path_from_item(item)
-        if episode_path and is_json_metadata_item(item):
-            by_episode[episode_path].append(item)
-    typer.echo(f"Found JSON metadata for {len(by_episode)} episodes.")
-    return by_episode
-
-
-def load_group_items(folder: Any, client: Any, debug: bool = False, debug_limit: int = 5) -> list[tuple[str, Any]]:
-    from encord.orm.storage import StorageItemType
-
-    groups = []
+    by_episode: dict[str, dict[str, list[Any]]] = defaultdict(lambda: {"videos": [], "jsons": []})
     scanned = 0
-    typer.echo(f"Scanning groups folder {folder.uuid} for existing video groups...")
-    for item in folder.list_items(page_size=1000, item_types=[StorageItemType.GROUP]):
+    skipped = 0
+    typer.echo(f"Scanning raw source folder {folder.uuid} for videos and JSON metadata...")
+    for item in folder.list_items(page_size=1000, item_types=[StorageItemType.VIDEO, StorageItemType.PLAIN_TEXT]):
         scanned += 1
         item_debug = debug and scanned <= debug_limit
         if item_debug:
             typer.echo("")
-            typer.echo(f"  Debug group {scanned}: {item.uuid} | {item.item_type} | {item.name}")
-            typer.echo(f"    group metadata: {metadata_hint(item_metadata(item))}")
-        episode_path = episode_path_from_item(item, client, debug=item_debug)
+            typer.echo(f"  Debug raw item {scanned}: {item.uuid} | {item.item_type} | {item.name}")
+            typer.echo(f"    metadata: {metadata_hint(item_metadata(item))}")
+        episode_path = episode_path_from_item(item)
         if item_debug:
             typer.echo(f"    resolved episode_path: {episode_path}")
-        if episode_path:
-            groups.append((episode_path, item))
-    typer.echo(f"Scanned {scanned} group items.")
-    typer.echo(f"Found {len(groups)} groups with episode_path from group or child file metadata.")
-    return groups
+        if not episode_path:
+            skipped += 1
+            continue
+        if item.item_type == StorageItemType.VIDEO:
+            by_episode[episode_path]["videos"].append(item)
+        elif is_json_metadata_item(item):
+            by_episode[episode_path]["jsons"].append(item)
+    typer.echo(f"Scanned {scanned} raw items; skipped {skipped} with no episode path.")
+    typer.echo(f"Found {len(by_episode)} episodes with raw videos and/or JSON metadata.")
+    return by_episode
 
 
 def group_name(episode_path: str) -> str:
@@ -215,14 +207,6 @@ def video_sort_key(item: Any) -> tuple[int, str]:
 
 def video_items_by_camera(video_items: list[Any]) -> dict[str, Any]:
     return {str(item_metadata(item).get("camera_name") or ""): item for item in video_items}
-
-
-def group_video_children(group_item: Any, client: Any) -> list[Any]:
-    from encord.orm.storage import StorageItemType
-
-    children = group_layout_children(group_item, client) or list(group_item.get_child_items())
-    videos = [child for child in children if child.item_type == StorageItemType.VIDEO]
-    return sorted(videos, key=video_sort_key)
 
 
 def sanitize_layout_key(value: str) -> str:
@@ -274,7 +258,7 @@ def metadata_sort_key(item: Any) -> tuple[int, str]:
     return order.get(role, 99), role
 
 
-def build_custom_group(episode_path: str, group_item: Any, video_items: list[Any], json_items: list[Any]) -> Any:
+def build_custom_group(episode_path: str, source_folder_id: UUID, video_items: list[Any], json_items: list[Any]) -> Any:
     from encord.orm.group_layout import DataUnitCarouselTile, DataUnitTile, LayoutGrid
     from encord.orm.storage import DataGroupCustom
 
@@ -316,7 +300,7 @@ def build_custom_group(episode_path: str, group_item: Any, video_items: list[Any
         client_metadata={
             "probe": "custom-carousel-data-group",
             "episode_path": episode_path,
-            "source_group_uuid": str(group_item.uuid),
+            "source_folder_id": str(source_folder_id),
             "video_uuids": [str(item.uuid) for item in video_items],
             "json_uuids": [str(item.uuid) for item in json_items],
         },
@@ -328,35 +312,27 @@ def main(
         UUID,
         typer.Option(help="Folder containing the ungrouped videos and JSON/text metadata items."),
     ] = DEFAULT_ALL_DATA_FOLDER,
-    groups_folder_id: Annotated[
-        UUID,
-        typer.Option(help="Folder containing the existing grouped 3-camera video data groups."),
-    ] = DEFAULT_GROUPS_FOLDER,
     limit: Annotated[int, typer.Option(help="Max matched groups to create unless --no-limit is passed.")] = 5,
     no_limit: Annotated[
         bool,
         typer.Option("--no-limit", help="Create custom carousel groups for every match."),
     ] = False,
     output_folder_name: Annotated[str | None, typer.Option(help="Name for the new output folder.")] = None,
-    debug: Annotated[bool, typer.Option("--debug", help="Print capped diagnostics while matching group metadata.")] = False,
-    debug_limit: Annotated[int, typer.Option(help="Number of group items to inspect in --debug output.")] = 5,
+    debug: Annotated[bool, typer.Option("--debug", help="Print capped diagnostics while matching raw items.")] = False,
+    debug_limit: Annotated[int, typer.Option(help="Number of raw items to inspect in --debug output.")] = 5,
     dataset_hash: Annotated[UUID | None, typer.Option(help="Optional dataset to link created groups into.")] = None,
 ) -> None:
 
     client = create_client()
     all_data_folder = client.get_storage_folder(all_data_folder_id)
-    groups_folder = client.get_storage_folder(groups_folder_id)
-
-    json_by_episode = load_json_items_by_episode(all_data_folder)
-    group_items = load_group_items(groups_folder, client, debug=debug, debug_limit=debug_limit)
 
     matches = []
-    for episode_path, group_item in group_items:
-        json_items = json_by_episode.get(episode_path, [])
-        if json_items:
-            matches.append((episode_path, group_item, json_items))
+    raw_by_episode = load_raw_items_by_episode(all_data_folder, debug=debug, debug_limit=debug_limit)
+    for episode_path, items in sorted(raw_by_episode.items()):
+        if items["videos"] and items["jsons"]:
+            matches.append((episode_path, sorted(items["videos"], key=video_sort_key), items["jsons"]))
 
-    typer.echo(f"Matched {len(matches)} existing groups to JSON metadata items.")
+    typer.echo(f"Matched {len(matches)} episodes with videos and JSON metadata.")
     selected = matches if no_limit else matches[:limit]
     typer.echo(f"Creating {len(selected)} custom carousel groups.")
     if not selected:
@@ -370,8 +346,7 @@ def main(
         client_metadata={
             "probe": "custom-carousel-data-group-output",
             "all_data_folder_id": str(all_data_folder_id),
-            "groups_folder_id": str(groups_folder_id),
-            "matched_group_count": len(matches),
+            "matched_episode_count": len(matches),
             "created_group_limit": None if no_limit else limit,
         },
     )
@@ -379,11 +354,9 @@ def main(
 
     dataset = client.get_dataset(dataset_hash) if dataset_hash is not None else None
 
-    for index, (episode_path, group_item, json_items) in enumerate(selected, start=1):
-        video_items = group_video_children(group_item, client)
+    for index, (episode_path, video_items, json_items) in enumerate(selected, start=1):
         typer.echo("")
         typer.echo(f"[{index}/{len(selected)}] {episode_path}")
-        typer.echo(f"  source group: {group_item.uuid} | {group_item.name}")
         for tile_index, item in enumerate(video_items, start=1):
             camera_name = item_metadata(item).get("camera_name")
             typer.echo(f"  video {tile_index}: {item.uuid} | {camera_name} | {item.name}")
@@ -397,7 +370,9 @@ def main(
             continue
 
         try:
-            created_uuid = output_folder.create_data_group(build_custom_group(episode_path, group_item, video_items, json_items))
+            created_uuid = output_folder.create_data_group(
+                build_custom_group(episode_path, all_data_folder_id, video_items, json_items)
+            )
         except Exception as exc:
             typer.echo("  Encord rejected this custom carousel group.")
             typer.echo(f"  {type(exc).__name__}: {exc}")

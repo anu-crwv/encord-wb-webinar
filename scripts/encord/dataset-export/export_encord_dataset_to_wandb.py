@@ -110,15 +110,24 @@ def s3_client(unsigned: bool):
 
 
 def group_children(item: Any, client: Any) -> list[Any]:
-    children = list(item.get_child_items())
-    if children:
-        return children
+    children_by_uuid = {str(child.uuid): child for child in item.get_child_items()}
 
-    summary = item.get_summary()
-    if summary.data_group is None:
-        return []
-    child_uuids = [child.uuid for child in summary.data_group.layout_contents.values()]
-    return client.get_storage_items(child_uuids)
+    try:
+        summary = item.get_summary()
+    except Exception:
+        return list(children_by_uuid.values())
+
+    if summary.data_group is not None:
+        child_uuids = [
+            child.uuid
+            for child in summary.data_group.layout_contents.values()
+            if str(child.uuid) not in children_by_uuid
+        ]
+        if child_uuids:
+            for child in client.get_storage_items(child_uuids):
+                children_by_uuid[str(child.uuid)] = child
+
+    return list(children_by_uuid.values())
 
 
 def video_children_by_camera(group_item: Any, client: Any) -> dict[str, Any]:
