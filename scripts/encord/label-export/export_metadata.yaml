@@ -1,0 +1,8 @@
+encord_project_hash: PROJECT_HASH
+source_s3_prefix: s3://ego-data-collection-encord/raw-feed/trossen-data/
+source_dataset_note: "Full Encord S3 project data; no sampling; no curation."
+label_version_note: "captioning-agent-v0 captions; no QC."
+captioning_method: captioning-agent-v0
+qc_status: none
+curation_status: uncurated
+# source_artifact_ref: encord-source-data:v0
