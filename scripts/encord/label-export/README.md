@@ -30,8 +30,7 @@ scripts/encord/wandb_config.yaml
 uv run --script scripts/encord/label-export/export_single_view_labels_to_wandb.py \
   --metadata-yaml scripts/encord/label-export/export_metadata.yaml \
   --source-artifact-ref encord-source-data:v0 \
-  --limit 3 \
-  --alias v0
+  --limit 3
 ```
 
 For a full export, omit `--limit`.

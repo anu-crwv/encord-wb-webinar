@@ -344,12 +344,9 @@ def preview_rows(labels: list[dict[str, Any]], metadata_by_hash: dict[str, dict[
 def load_source_artifact_metadata(
     *,
     wandb_config: dict[str, Any],
-    source_artifact_ref: str | None,
+    source_artifact_ref: str,
     output_dir: Path,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    if not source_artifact_ref:
-        return None, []
-
     import wandb
 
     entity = required(wandb_config, "entity", "W&B config")
@@ -511,13 +508,12 @@ def export_label_overlay(
     *,
     rows: list[dict[str, Any]],
     output_dir: Path,
-    metadata: dict[str, Any],
+    source_artifact_ref: str,
     source_items: list[dict[str, Any]],
     source_manifest: dict[str, Any] | None,
-    unsigned_s3: bool,
     limit: int | None,
 ) -> dict[str, Any]:
-    client_s3 = s3_client(unsigned_s3)
+    client_s3 = s3_client(unsigned=False)
     source_by_key = source_episode_order(source_items)
     selected: list[tuple[int, dict[str, Any], dict[str, Any] | None]] = []
     skipped: list[dict[str, Any]] = []
@@ -629,7 +625,7 @@ def export_label_overlay(
 
     summary = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
-        "source_dataset_artifact": metadata.get("source_artifact_ref"),
+        "source_dataset_artifact": source_artifact_ref,
         "source_dataset_manifest": source_manifest,
         "label_episode_count": len(episode_rows),
         "label_task_count": len(task_rows),
@@ -646,8 +642,8 @@ def log_to_wandb(
     *,
     wandb_config: dict[str, Any],
     metadata: dict[str, Any],
+    source_artifact_ref: str,
     output_dir: Path,
-    aliases: list[str],
 ) -> dict[str, str]:
     import wandb
 
@@ -668,10 +664,8 @@ def log_to_wandb(
 
     with wandb.init(entity=entity, project=project, job_type="encord-label-export", name=run_name) as run:
         typer.echo(f"Logging to W&B run {run.url}...")
-        source_ref = metadata.get("source_artifact_ref")
-        if source_ref:
-            typer.echo(f"Using existing source artifact {source_ref}.")
-            run.use_artifact(source_ref)
+        typer.echo(f"Using source dataset artifact {source_artifact_ref}.")
+        run.use_artifact(source_artifact_ref)
 
         typer.echo(f"Logging labels artifact {label_name}...")
         label_artifact = wandb.Artifact(
@@ -680,7 +674,7 @@ def log_to_wandb(
             metadata={
                 "encord_project_hash": manifest.get("encord_project_hash"),
                 "encord_dataset_hash": manifest.get("encord_dataset_hash"),
-                "source_dataset_artifact": source_ref,
+                "source_dataset_artifact": source_artifact_ref,
                 "label_version_note": metadata.get("label_version_note"),
                 "captioning_method": metadata.get("captioning_method"),
                 "qc_status": metadata.get("qc_status"),
@@ -694,7 +688,7 @@ def log_to_wandb(
         label_artifact.add_file(str(labels_path), name="encord_labels.json")
         label_artifact.add_file(str(preview_path), name="label_preview_rows.json")
         label_artifact.add_file(str(manifest_path), name="label_export_manifest.json")
-        logged_labels = run.log_artifact(label_artifact, aliases=aliases)
+        logged_labels = run.log_artifact(label_artifact, aliases=["latest", "single-view"])
         logged_labels.wait()
         labels_ref = f"{label_name}:{logged_labels.version}"
         typer.echo(f"Logged labels artifact {labels_ref}.")
@@ -726,31 +720,28 @@ def log_to_wandb(
         run.log({table_name: table})
         typer.echo("Logged preview table.")
 
-        return {"source_dataset_artifact": source_ref, "labels_artifact": labels_ref, "run_url": run.url}
+        return {"source_dataset_artifact": source_artifact_ref, "labels_artifact": labels_ref, "run_url": run.url}
 
 
 def main(
     metadata_yaml: Annotated[Path, typer.Option(help="Required YAML notes for this dataset/label version.")],
-    wandb_config: Annotated[Path, typer.Option(help="W&B config YAML.")] = DEFAULT_WANDB_CONFIG,
     source_artifact_ref: Annotated[
-        str | None,
-        typer.Option(help="W&B dataset artifact this labels artifact overlays. Overrides metadata YAML."),
-    ] = None,
+        str,
+        typer.Option(help="Required W&B dataset artifact this labels artifact overlays."),
+    ],
+    wandb_config: Annotated[Path, typer.Option(help="W&B config YAML.")] = DEFAULT_WANDB_CONFIG,
     limit: Annotated[int | None, typer.Option(help="Optional max number of caption episodes to export.")] = None,
-    alias: Annotated[list[str] | None, typer.Option("--alias", help="W&B artifact alias. Repeatable.")] = None,
-    unsigned_s3: Annotated[bool, typer.Option(help="Use unsigned S3 requests for public buckets.")] = False,
 ) -> None:
     typer.echo("Loading config...")
     metadata = load_yaml(metadata_yaml, "metadata YAML")
+    metadata_notes = {key: value for key, value in metadata.items() if key != "source_artifact_ref"}
     wandb_settings = load_yaml(wandb_config, "W&B config")
-    if source_artifact_ref:
-        metadata["source_artifact_ref"] = source_artifact_ref
     project_hash = str(required(metadata, "encord_project_hash", "metadata YAML"))
 
     output_dir = make_output_dir()
     source_manifest, source_items = load_source_artifact_metadata(
         wandb_config=wandb_settings,
-        source_artifact_ref=metadata.get("source_artifact_ref"),
+        source_artifact_ref=source_artifact_ref,
         output_dir=output_dir,
     )
 
@@ -772,16 +763,16 @@ def main(
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "source_item_count": len(dataset_items),
         "label_row_count": len(labels),
-        **metadata,
+        **metadata_notes,
+        "source_artifact_ref": source_artifact_ref,
     }
 
     label_summary = export_label_overlay(
         rows=rows,
         output_dir=output_dir,
-        metadata=metadata,
+        source_artifact_ref=source_artifact_ref,
         source_items=source_items,
         source_manifest=source_manifest,
-        unsigned_s3=unsigned_s3,
         limit=limit,
     )
     label_summary.update({
@@ -789,10 +780,10 @@ def main(
         "encord_project_title": project.title,
         "encord_dataset_hash": dataset_hash,
         "encord_dataset_title": project_dataset.title,
-        "source_dataset_artifact": metadata.get("source_artifact_ref"),
-        "label_version_note": metadata.get("label_version_note"),
-        "captioning_method": metadata.get("captioning_method"),
-        "qc_status": metadata.get("qc_status"),
+        "source_dataset_artifact": source_artifact_ref,
+        "label_version_note": metadata_notes.get("label_version_note"),
+        "captioning_method": metadata_notes.get("captioning_method"),
+        "qc_status": metadata_notes.get("qc_status"),
     })
     write_json(output_dir / "label_export_manifest.json", label_summary)
 
@@ -806,9 +797,9 @@ def main(
 
     lineage = log_to_wandb(
         wandb_config=wandb_settings,
-        metadata=metadata,
+        metadata=metadata_notes,
+        source_artifact_ref=source_artifact_ref,
         output_dir=output_dir,
-        aliases=alias or ["latest", "single-view"],
     )
     write_json(output_dir / "wandb_lineage.json", lineage)
 
