@@ -660,8 +660,13 @@ def log_to_wandb(
     preview_path = output_dir / "label_preview_rows.json"
     manifest_path = output_dir / "label_export_manifest.json"
     manifest = json.loads(manifest_path.read_text())
+    run_name = (
+        f"encord-labels-{label_name}-"
+        f"{str(manifest.get('encord_project_hash') or 'unknown')[:8]}-"
+        f"{manifest.get('label_episode_count', 0)}eps"
+    )
 
-    with wandb.init(entity=entity, project=project, job_type="encord-label-export") as run:
+    with wandb.init(entity=entity, project=project, job_type="encord-label-export", name=run_name) as run:
         typer.echo(f"Logging to W&B run {run.url}...")
         source_ref = metadata.get("source_artifact_ref")
         if source_ref:

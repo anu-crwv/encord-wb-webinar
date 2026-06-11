@@ -279,8 +279,12 @@ def log_to_wandb(
     entity = required(wandb_config, "entity", "W&B config")
     project = required(wandb_config, "project", "W&B config")
     artifact_name = required(wandb_config, "source_artifact_name", "W&B config")
+    run_name = (
+        f"encord-dataset-{artifact_name}-"
+        f"{str(summary['encord_dataset_hash'])[:8]}-{summary['episode_count']}eps"
+    )
 
-    with wandb.init(entity=entity, project=project, job_type="encord-dataset-export") as run:
+    with wandb.init(entity=entity, project=project, job_type="encord-dataset-export", name=run_name) as run:
         artifact = wandb.Artifact(
             artifact_name,
             type="dataset",
