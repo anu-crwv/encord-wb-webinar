@@ -46,6 +46,9 @@ Logs:
 - labels artifact with `dataset/data/...` and `dataset/meta/...`
 - preview table with `language_instruction`
 
+The W&B artifact type is `dataset` because W&B artifact names cannot change type after creation, and this
+overlay is materialized as a dataset fragment.
+
 The labels artifact is intended to be materialized together with the source dataset artifact:
 
 ```text

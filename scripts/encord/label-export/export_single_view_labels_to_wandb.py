@@ -359,10 +359,10 @@ def load_source_artifact_metadata(
     artifact = wandb.Api().artifact(artifact_ref)
     artifact_dir = output_dir / "source_artifact_metadata"
     manifest_file = Path(
-        artifact.get_path("dataset/meta/source_dataset_manifest.json").download(root=str(artifact_dir))
+        artifact.get_entry("dataset/meta/source_dataset_manifest.json").download(root=str(artifact_dir))
     )
     items_file = Path(
-        artifact.get_path("dataset/meta/source_dataset_items.json").download(root=str(artifact_dir))
+        artifact.get_entry("dataset/meta/source_dataset_items.json").download(root=str(artifact_dir))
     )
     return json.loads(manifest_file.read_text()), json.loads(items_file.read_text())
 
@@ -670,7 +670,7 @@ def log_to_wandb(
         typer.echo(f"Logging labels artifact {label_name}...")
         label_artifact = wandb.Artifact(
             label_name,
-            type="labels",
+            type="dataset",
             metadata={
                 "encord_project_hash": manifest.get("encord_project_hash"),
                 "encord_dataset_hash": manifest.get("encord_dataset_hash"),
