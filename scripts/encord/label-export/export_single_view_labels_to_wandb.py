@@ -44,6 +44,8 @@ TROSSEN_STATE_ACTION_SPLITS = [
     ("right_joint_pos", 7, 14),
     ("base_velocity", 14, 16),
 ]
+RELATIVE_STATS_KEYS = ["left_joint_pos", "right_joint_pos"]
+RELATIVE_STATS_ACTION_HORIZON = 24
 TROSSEN_STATE_ACTION_NAMES = [
     "left_joint_0",
     "left_joint_1",
@@ -552,6 +554,19 @@ def table_column_as_numpy(table: Any, column: str) -> Any:
     return data
 
 
+def array_stats(data: Any) -> dict[str, Any]:
+    import numpy as np
+
+    return {
+        "mean": np.mean(data, axis=0).tolist(),
+        "std": np.std(data, axis=0).tolist(),
+        "min": np.min(data, axis=0).tolist(),
+        "max": np.max(data, axis=0).tolist(),
+        "q01": np.quantile(data, 0.01, axis=0).tolist(),
+        "q99": np.quantile(data, 0.99, axis=0).tolist(),
+    }
+
+
 def compute_stats(parquet_paths: list[Path], columns: list[str]) -> dict[str, Any]:
     import numpy as np
     import pyarrow.parquet as pq
@@ -574,14 +589,7 @@ def compute_stats(parquet_paths: list[Path], columns: list[str]) -> dict[str, An
         if not arrays:
             raise ValueError(f"Cannot build stats.json: no data found for column {column}")
         data = np.concatenate(arrays, axis=0)
-        stats[column] = {
-            "mean": np.mean(data, axis=0).tolist(),
-            "std": np.std(data, axis=0).tolist(),
-            "min": np.min(data, axis=0).tolist(),
-            "max": np.max(data, axis=0).tolist(),
-            "q01": np.quantile(data, 0.01, axis=0).tolist(),
-            "q99": np.quantile(data, 0.99, axis=0).tolist(),
-        }
+        stats[column] = array_stats(data)
     return stats
 
 
@@ -598,6 +606,89 @@ def validate_stats_json(info: dict[str, Any], stats: dict[str, Any]) -> None:
             if actual_dim != expected_dim:
                 raise ValueError(
                     f"stats.json {key}.{stat_name} has length {actual_dim}; expected {expected_dim}"
+                )
+
+
+def compute_relative_stats(
+    parquet_paths: list[Path],
+    modality: dict[str, Any],
+    relative_keys: list[str],
+    action_horizon: int,
+) -> dict[str, Any]:
+    import numpy as np
+    import pyarrow.parquet as pq
+
+    if action_horizon <= 0:
+        raise ValueError(f"Action horizon must be positive, got {action_horizon}")
+
+    stats: dict[str, Any] = {}
+    for key in relative_keys:
+        action_meta = (modality.get("action") or {}).get(key)
+        state_meta = (modality.get("state") or {}).get(key)
+        if not action_meta:
+            raise ValueError(f"Cannot build relative_stats_dreamzero.json: missing action.{key} modality")
+        if not state_meta:
+            raise ValueError(f"Cannot build relative_stats_dreamzero.json: missing state.{key} modality")
+
+        action_col = action_meta["original_key"]
+        state_col = state_meta["original_key"]
+        columns = list(dict.fromkeys([action_col, state_col]))
+        relative_chunks = []
+
+        for parquet_path in parquet_paths:
+            table = pq.read_table(parquet_path, columns=columns)
+            action_data = table_column_as_numpy(table, action_col)
+            state_data = table_column_as_numpy(table, state_col)
+            if action_data is None or state_data is None:
+                continue
+
+            action_slice = action_data[:, int(action_meta["start"]):int(action_meta["end"])]
+            state_slice = state_data[:, int(state_meta["start"]):int(state_meta["end"])]
+            if action_slice.shape[1] != state_slice.shape[1]:
+                raise ValueError(
+                    f"Cannot build relative stats for {key}: action dim {action_slice.shape[1]} "
+                    f"does not match state dim {state_slice.shape[1]}"
+                )
+
+            # Match DreamZero action delta indices [0, ..., action_horizon - 1].
+            usable = max(action_slice.shape[0] - action_horizon + 1, 0)
+            for frame_index in range(usable):
+                ref_state = state_slice[frame_index]
+                actions = action_slice[frame_index:frame_index + action_horizon]
+                relative_chunks.append(actions - ref_state)
+
+        if not relative_chunks:
+            raise ValueError(f"Cannot build relative stats for {key}: no usable action windows found")
+
+        stats[key] = array_stats(np.concatenate(relative_chunks, axis=0))
+
+    return stats
+
+
+def validate_relative_stats_json(
+    modality: dict[str, Any],
+    stats: dict[str, Any],
+    relative_keys: list[str],
+) -> None:
+    required_stats = {"mean", "std", "min", "max", "q01", "q99"}
+    if set(stats) != set(relative_keys):
+        raise ValueError(
+            "relative_stats_dreamzero.json keys do not match expected keys: "
+            f"expected {relative_keys}, got {sorted(stats)}"
+        )
+
+    for key in relative_keys:
+        action_meta = (modality.get("action") or {}).get(key) or {}
+        expected_dim = int(action_meta["end"]) - int(action_meta["start"])
+        missing = required_stats - set(stats[key])
+        if missing:
+            raise ValueError(f"relative_stats_dreamzero.json {key} is missing stats: {sorted(missing)}")
+        for stat_name in required_stats:
+            actual_dim = len(stats[key][stat_name])
+            if actual_dim != expected_dim:
+                raise ValueError(
+                    f"relative_stats_dreamzero.json {key}.{stat_name} has length {actual_dim}; "
+                    f"expected {expected_dim}"
                 )
 
 
@@ -866,9 +957,17 @@ def export_label_overlay(
     stats_cols = stats_columns(info, set(first_table.column_names))
     stats = compute_stats(parquet_paths, stats_cols)
     validate_stats_json(info, stats)
+    relative_stats = compute_relative_stats(
+        parquet_paths=parquet_paths,
+        modality=modality,
+        relative_keys=RELATIVE_STATS_KEYS,
+        action_horizon=RELATIVE_STATS_ACTION_HORIZON,
+    )
+    validate_relative_stats_json(modality, relative_stats, RELATIVE_STATS_KEYS)
     write_json(dataset_meta / "info.json", info)
     write_json(dataset_meta / "modality.json", modality)
     write_json(dataset_meta / "stats.json", stats)
+    write_json(dataset_meta / "relative_stats_dreamzero.json", relative_stats)
 
     summary = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -878,6 +977,8 @@ def export_label_overlay(
         "label_task_count": len(task_rows),
         "label_frame_count": total_frames,
         "stats_columns": stats_cols,
+        "relative_stats_keys": RELATIVE_STATS_KEYS,
+        "relative_stats_action_horizon": RELATIVE_STATS_ACTION_HORIZON,
         "skipped_label_count": len(skipped),
         "episodes": sorted(manifest_rows, key=lambda item: item["episode_index"]),
         "skipped_labels": skipped,
