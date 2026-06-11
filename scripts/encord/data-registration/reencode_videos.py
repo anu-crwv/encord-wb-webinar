@@ -3,6 +3,7 @@
 # dependencies = [
 #     "encord",
 #     "requests",
+#     "tqdm",
 #     "typer",
 # ]
 # ///
@@ -36,6 +37,7 @@ from encord.http.utils import CloudUploadSettings
 from encord.orm.dataset import DataLinkDuplicatesBehavior
 from encord.storage import StorageFolder, StorageItem, StorageItemType
 from encord.user_client import EncordUserClient
+from tqdm import tqdm
 
 ENCORD_SSH_KEY_ENV = "ENCORD_SSH_KEY_FILE"
 WORKERS_ENV = "ENCORD_REENCODE_WORKERS"
@@ -44,7 +46,6 @@ REPORT_NAME = "reencode_videos_report.json"
 DOWNLOAD_CHUNK_SIZE = 16 * 1024 * 1024
 BULK_GET_CHUNK_SIZE = 500
 LINK_CHUNK_SIZE = 1_000
-PROGRESS_INTERVAL = 25
 REQUEST_TIMEOUT = (30, 300)
 UPLOAD_SETTINGS = CloudUploadSettings(max_retries=5, backoff_factor=1.0, allow_failures=False)
 
@@ -313,11 +314,17 @@ def process_video(job: VideoJob, root: Path | None) -> ProcessedVideo:
 def process_jobs(jobs: list[VideoJob], workers: int, root: Path | None) -> tuple[list[ProcessedVideo], list[dict[str, str]]]:
     processed: list[ProcessedVideo] = []
     failed: list[dict[str, str]] = []
-    total = len(jobs)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(process_video, job, root): job for job in jobs}
-        for completed, future in enumerate(as_completed(futures), start=1):
+        progress = tqdm(
+            as_completed(futures),
+            total=len(futures),
+            desc="Re-encoding videos",
+            unit="video",
+            dynamic_ncols=True,
+        )
+        for future in progress:
             job = futures[future]
             try:
                 processed.append(future.result())
@@ -329,13 +336,7 @@ def process_jobs(jobs: list[VideoJob], workers: int, root: Path | None) -> tuple
                         "error": str(exc),
                     }
                 )
-
-            if completed == total or completed % PROGRESS_INTERVAL == 0:
-                typer.echo(
-                    f"Progress: completed={completed:,}/{total:,} "
-                    f"uploaded={len(processed):,} failed={len(failed):,}",
-                    err=True,
-                )
+            progress.set_postfix(uploaded=len(processed), failed=len(failed))
 
     return processed, failed
 
@@ -344,8 +345,9 @@ def link_dataset_items(dataset: Any, processed: list[ProcessedVideo]) -> tuple[i
     linked = 0
     errors: list[dict[str, str]] = []
     item_uuids = [UUID(item.new_item_uuid) for item in processed]
+    chunks = list(chunked(item_uuids, LINK_CHUNK_SIZE))
 
-    for ids in chunked(item_uuids, LINK_CHUNK_SIZE):
+    for ids in tqdm(chunks, desc="Linking dataset", unit="chunk", dynamic_ncols=True):
         try:
             rows = dataset.link_items(list(ids), duplicates_behavior=DataLinkDuplicatesBehavior.SKIP)
             linked += len(rows)
