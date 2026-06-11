@@ -7,7 +7,7 @@
 #     "typer",
 # ]
 # ///
-"""Download Encord videos, re-encode them to MP4, and upload them back.
+"""Download Encord videos, re-encode them to MP4, and upload them to a regular folder.
 
 Set your Encord key once:
     export ENCORD_SSH_KEY_FILE=/path/to/encord_key
@@ -24,9 +24,10 @@ import shutil
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from threading import Semaphore
 from typing import Annotated, Any, Iterable, Sequence
 from uuid import UUID
 
@@ -41,6 +42,7 @@ from tqdm import tqdm
 
 ENCORD_SSH_KEY_ENV = "ENCORD_SSH_KEY_FILE"
 WORKERS_ENV = "ENCORD_REENCODE_WORKERS"
+UPLOAD_WORKERS_ENV = "ENCORD_REENCODE_UPLOAD_WORKERS"
 TMPDIR_ENV = "ENCORD_REENCODE_TMPDIR"
 REPORT_NAME = "reencode_videos_report.json"
 DOWNLOAD_CHUNK_SIZE = 16 * 1024 * 1024
@@ -48,11 +50,6 @@ BULK_GET_CHUNK_SIZE = 500
 LINK_CHUNK_SIZE = 1_000
 REQUEST_TIMEOUT = (30, 300)
 UPLOAD_SETTINGS = CloudUploadSettings(max_retries=5, backoff_factor=1.0, allow_failures=False)
-UNSUPPORTED_CLOUD_SYNCED_UPLOAD = "uploading files to cloud synced folder"
-UNSUPPORTED_CLOUD_SYNCED_HINT = (
-    "Target folder is a Cloud Synced Folder. Encord direct uploads are not supported there; "
-    "upload the re-encoded files to the backing cloud location and re-sync, or use a regular storage folder."
-)
 
 
 @dataclass(frozen=True)
@@ -105,6 +102,14 @@ def worker_count() -> int:
         raise typer.BadParameter(f"{WORKERS_ENV} must be an integer.") from exc
 
 
+def upload_worker_count(workers: int) -> int:
+    raw = os.environ.get(UPLOAD_WORKERS_ENV, "2")
+    try:
+        return min(workers, max(1, int(raw)))
+    except ValueError as exc:
+        raise typer.BadParameter(f"{UPLOAD_WORKERS_ENV} must be an integer.") from exc
+
+
 def temp_root() -> Path | None:
     raw = os.environ.get(TMPDIR_ENV)
     if not raw:
@@ -155,6 +160,18 @@ def reencoded_title(title: str) -> str:
 
 def item_title(item: StorageItem, fallback: str | None = None) -> str:
     return str(getattr(item, "name", None) or fallback or getattr(item, "uuid", "video"))
+
+
+def source_title(source: Source, source_hash: str) -> str:
+    if source.kind == "dataset":
+        return str(getattr(source.dataset, "title", None) or source_hash)
+    return str(getattr(source.folder, "name", None) or source_hash)
+
+
+def create_output_folder(client: EncordUserClient, source: Source, source_hash: str) -> StorageFolder:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    name = f"{source_title(source, source_hash)} re-encoded {timestamp}"
+    return client.create_storage_folder(name=name)
 
 
 def get_storage_items_lenient(
@@ -285,11 +302,11 @@ def run_ffmpeg(input_path: Path, output_path: Path) -> str:
     raise RuntimeError(f"ffmpeg failed: {stderr[-2000:]}")
 
 
-def is_unsupported_cloud_synced_upload(error: str) -> bool:
-    return UNSUPPORTED_CLOUD_SYNCED_UPLOAD in error.lower()
+def with_target_folder(jobs: list[VideoJob], target_folder: StorageFolder) -> list[VideoJob]:
+    return [replace(job, target_folder=target_folder) for job in jobs]
 
 
-def process_video(job: VideoJob, root: Path | None) -> ProcessedVideo:
+def process_video(job: VideoJob, root: Path | None, upload_gate: Semaphore) -> ProcessedVideo:
     title = job.source_title
     new_title = reencoded_title(title)
     source_suffix = PurePosixPath(title).suffix or ".video"
@@ -302,12 +319,15 @@ def process_video(job: VideoJob, root: Path | None) -> ProcessedVideo:
         download_item(job.item, input_path)
         audio_mode = run_ffmpeg(input_path, output_path)
 
-        target_folder = job.target_folder or job.item.parent_folder()
-        new_item_uuid = target_folder.upload_video(
-            output_path,
-            title=new_title,
-            cloud_upload_settings=UPLOAD_SETTINGS,
-        )
+        if job.target_folder is None:
+            raise RuntimeError("Missing output storage folder.")
+
+        with upload_gate:
+            new_item_uuid = job.target_folder.upload_video(
+                output_path,
+                title=new_title,
+                cloud_upload_settings=UPLOAD_SETTINGS,
+            )
 
     return ProcessedVideo(
         source_item_uuid=str(job.item.uuid),
@@ -315,17 +335,23 @@ def process_video(job: VideoJob, root: Path | None) -> ProcessedVideo:
         source_data_hash=job.dataset_data_hash,
         new_item_uuid=str(new_item_uuid),
         new_title=new_title,
-        target_folder_uuid=str(target_folder.uuid),
+        target_folder_uuid=str(job.target_folder.uuid),
         audio_mode=audio_mode,
     )
 
 
-def process_jobs(jobs: list[VideoJob], workers: int, root: Path | None) -> tuple[list[ProcessedVideo], list[dict[str, str]]]:
+def process_jobs(
+    jobs: list[VideoJob],
+    workers: int,
+    upload_workers: int,
+    root: Path | None,
+) -> tuple[list[ProcessedVideo], list[dict[str, str]]]:
     processed: list[ProcessedVideo] = []
     failed: list[dict[str, str]] = []
+    upload_gate = Semaphore(upload_workers)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(process_video, job, root): job for job in jobs}
+        futures = {executor.submit(process_video, job, root, upload_gate): job for job in jobs}
         progress = tqdm(
             as_completed(futures),
             total=len(futures),
@@ -346,18 +372,6 @@ def process_jobs(jobs: list[VideoJob], workers: int, root: Path | None) -> tuple
                         "error": error,
                     }
                 )
-                if is_unsupported_cloud_synced_upload(error):
-                    cancelled = sum(1 for pending in futures if pending is not future and pending.cancel())
-                    failed.append(
-                        {
-                            "reason": "cancelled_after_unsupported_cloud_synced_target",
-                            "cancelled_jobs": str(cancelled),
-                            "error": UNSUPPORTED_CLOUD_SYNCED_HINT,
-                        }
-                    )
-                    progress.set_postfix(uploaded=len(processed), failed=len(failed))
-                    progress.close()
-                    break
             progress.set_postfix(uploaded=len(processed), failed=len(failed))
 
     return processed, failed
@@ -394,6 +408,7 @@ def main(
 ) -> None:
     require_ffmpeg()
     workers = worker_count()
+    upload_workers = upload_worker_count(workers)
     root = temp_root()
     client = get_client()
     source = resolve_source(client, source_hash)
@@ -404,13 +419,42 @@ def main(
         jobs, skipped = discover_folder_jobs(source.folder)
 
     typer.echo(f"Source: {source.kind} {source_hash}")
-    typer.echo(f"Videos to process: {len(jobs):,}; skipped: {len(skipped):,}; workers: {workers}")
+    typer.echo(
+        f"Videos to process: {len(jobs):,}; skipped: {len(skipped):,}; "
+        f"workers: {workers}; upload_workers: {upload_workers}"
+    )
+
+    if not jobs:
+        report = {
+            "source_hash": source_hash,
+            "source_kind": source.kind,
+            "started_at": utc_now(),
+            "finished_at": utc_now(),
+            "workers": workers,
+            "upload_workers": upload_workers,
+            "found_videos": 0,
+            "skipped": skipped,
+            "processed": [],
+            "failed": [],
+            "linked_to_dataset": 0,
+            "link_errors": [],
+        }
+        path = write_report(report)
+        typer.echo(f"No videos to process. Report JSON: {path}")
+        return
+
+    output_folder = create_output_folder(client, source, source_hash)
+    jobs = with_target_folder(jobs, output_folder)
+    typer.echo(f"Output folder: {output_folder.name} ({output_folder.uuid})")
 
     report: dict[str, Any] = {
         "source_hash": source_hash,
         "source_kind": source.kind,
+        "output_folder_hash": str(output_folder.uuid),
+        "output_folder_name": output_folder.name,
         "started_at": utc_now(),
         "workers": workers,
+        "upload_workers": upload_workers,
         "found_videos": len(jobs),
         "skipped": skipped,
         "processed": [],
@@ -419,7 +463,7 @@ def main(
         "link_errors": [],
     }
 
-    processed, failed = process_jobs(jobs, workers, root)
+    processed, failed = process_jobs(jobs, workers, upload_workers, root)
     report["processed"] = [video.__dict__ for video in processed]
     report["failed"] = failed
 
