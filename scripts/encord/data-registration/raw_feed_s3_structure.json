@@ -1,0 +1,2120 @@
+{
+  "s3_uri": "s3://ego-data-collection-encord/raw-feed/",
+  "bucket": "ego-data-collection-encord",
+  "prefix": "raw-feed/",
+  "region": "us-east-2",
+  "limits": {
+    "max_objects": 2000,
+    "sample_per_folder": 300,
+    "tree_depth": 2,
+    "tree_folders_per_prefix": 25,
+    "tree_files_per_prefix": 5,
+    "recursive": true
+  },
+  "top_level": {
+    "folders": [
+      "raw-feed/anvil-data/",
+      "raw-feed/egocentric/",
+      "raw-feed/failed-videos/",
+      "raw-feed/passed-videos/",
+      "raw-feed/test-folder/",
+      "raw-feed/trossen-data-stationary/",
+      "raw-feed/trossen-data/"
+    ],
+    "files": []
+  },
+  "directory_tree_sample": {
+    "prefix": "raw-feed/",
+    "depth": 0,
+    "truncated": false,
+    "sampled_direct_files": [],
+    "child_prefixes_sampled": [
+      "raw-feed/anvil-data/",
+      "raw-feed/egocentric/",
+      "raw-feed/failed-videos/",
+      "raw-feed/passed-videos/",
+      "raw-feed/test-folder/",
+      "raw-feed/trossen-data-stationary/",
+      "raw-feed/trossen-data/"
+    ],
+    "children": [
+      {
+        "prefix": "raw-feed/anvil-data/",
+        "depth": 1,
+        "truncated": false,
+        "sampled_direct_files": [],
+        "child_prefixes_sampled": [
+          "raw-feed/anvil-data/anvil test/",
+          "raw-feed/anvil-data/anvil upload test/"
+        ],
+        "children": [
+          {
+            "prefix": "raw-feed/anvil-data/anvil test/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/anvil-data/anvil test/Kitchen/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/anvil-data/anvil upload test/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/anvil-data/anvil upload test/Kitchen/"
+            ],
+            "children": []
+          }
+        ]
+      },
+      {
+        "prefix": "raw-feed/egocentric/",
+        "depth": 1,
+        "truncated": true,
+        "sampled_direct_files": [
+          {
+            "key": "raw-feed/egocentric/Orbbec Gemini 2 L_CPAMC5200LY_20260505123804.bag",
+            "size_bytes": 2125059688,
+            "extension": ".bag",
+            "data_type": "robotics log",
+            "last_modified": "2026-05-29T14:21:15+00:00"
+          },
+          {
+            "key": "raw-feed/egocentric/Orbbec Gemini 2 L_CPAMC5200LY_20260505123910.bag",
+            "size_bytes": 2262591294,
+            "extension": ".bag",
+            "data_type": "robotics log",
+            "last_modified": "2026-05-29T14:19:31+00:00"
+          },
+          {
+            "key": "raw-feed/egocentric/Orbbec Gemini 2 L_CPAMC5200LY_20260505124016.bag",
+            "size_bytes": 2150966325,
+            "extension": ".bag",
+            "data_type": "robotics log",
+            "last_modified": "2026-05-29T14:21:15+00:00"
+          },
+          {
+            "key": "raw-feed/egocentric/Orbbec Gemini 2 L_CPAMC5200LY_20260505124123.bag",
+            "size_bytes": 2127036921,
+            "extension": ".bag",
+            "data_type": "robotics log",
+            "last_modified": "2026-05-29T14:21:15+00:00"
+          },
+          {
+            "key": "raw-feed/egocentric/Orbbec Gemini 2 L_CPAMC5200LY_20260505124229.bag",
+            "size_bytes": 2257024815,
+            "extension": ".bag",
+            "data_type": "robotics log",
+            "last_modified": "2026-05-29T14:21:15+00:00"
+          }
+        ],
+        "child_prefixes_sampled": [
+          "raw-feed/egocentric/01-06-26/",
+          "raw-feed/egocentric/02-06-26/",
+          "raw-feed/egocentric/04-05-26/",
+          "raw-feed/egocentric/05-05-26/",
+          "raw-feed/egocentric/08-05-26/",
+          "raw-feed/egocentric/19-05-26/",
+          "raw-feed/egocentric/20-05-26/",
+          "raw-feed/egocentric/2026-04-30_remaining/",
+          "raw-feed/egocentric/20260413/",
+          "raw-feed/egocentric/20260414/",
+          "raw-feed/egocentric/20260416/",
+          "raw-feed/egocentric/20260417/",
+          "raw-feed/egocentric/20260420/",
+          "raw-feed/egocentric/20260421/",
+          "raw-feed/egocentric/20260426/",
+          "raw-feed/egocentric/20260428/",
+          "raw-feed/egocentric/20260429/",
+          "raw-feed/egocentric/20260430/",
+          "raw-feed/egocentric/20260504/",
+          "raw-feed/egocentric/20260505/",
+          "raw-feed/egocentric/20260506/",
+          "raw-feed/egocentric/20260507/",
+          "raw-feed/egocentric/20260508/",
+          "raw-feed/egocentric/20260511/",
+          "raw-feed/egocentric/20260512/"
+        ],
+        "children": [
+          {
+            "prefix": "raw-feed/egocentric/01-06-26/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [
+              {
+                "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601145727.bag",
+                "size_bytes": 103895846,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-06-01T19:36:51+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601145918.bag",
+                "size_bytes": 973296029,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-06-01T20:23:15+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601150024.bag",
+                "size_bytes": 976379319,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-06-01T19:36:52+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601150130.bag",
+                "size_bytes": 972860676,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-06-01T20:23:14+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601150237.bag",
+                "size_bytes": 976613206,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-06-01T20:23:14+00:00"
+              }
+            ],
+            "child_prefixes_sampled": [],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/02-06-26/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [
+              {
+                "key": "raw-feed/egocentric/02-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260602074257.bag",
+                "size_bytes": 995787148,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-06-02T17:09:47+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/02-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260602074404.bag",
+                "size_bytes": 1005521165,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-06-02T17:09:49+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/02-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260602074510.bag",
+                "size_bytes": 1009717222,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-06-02T17:09:48+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/02-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260602074616.bag",
+                "size_bytes": 990660790,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-06-02T18:11:26+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/02-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260602074722.bag",
+                "size_bytes": 988091031,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-06-02T18:11:26+00:00"
+              }
+            ],
+            "child_prefixes_sampled": [],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/04-05-26/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [
+              {
+                "key": "raw-feed/egocentric/04-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260504113318.bag",
+                "size_bytes": 1039292777,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-04T13:57:10+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/04-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260504113424.bag",
+                "size_bytes": 1073627337,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-04T13:57:10+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/04-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260504113530.bag",
+                "size_bytes": 1057381246,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-04T13:57:09+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/04-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260504113636.bag",
+                "size_bytes": 1062048206,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-04T13:57:08+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/04-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260504113849.bag",
+                "size_bytes": 1046186317,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-04T14:01:14+00:00"
+              }
+            ],
+            "child_prefixes_sampled": [],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/05-05-26/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [
+              {
+                "key": "raw-feed/egocentric/05-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260505141018.bag",
+                "size_bytes": 1042314046,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-05T13:00:34+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/05-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260505141124.bag",
+                "size_bytes": 878667979,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-05T13:00:36+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/05-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260505141231.bag",
+                "size_bytes": 1040071358,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-05T13:00:36+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/05-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260505141337.bag",
+                "size_bytes": 1053064834,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-05T13:00:36+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/05-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260505141443.bag",
+                "size_bytes": 1052460632,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-05T13:00:36+00:00"
+              }
+            ],
+            "child_prefixes_sampled": [],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/08-05-26/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [
+              {
+                "key": "raw-feed/egocentric/08-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260508105038.bag",
+                "size_bytes": 1028532406,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-10T08:02:51+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/08-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260508105144.bag",
+                "size_bytes": 1044266818,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-10T08:02:53+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/08-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260508105250.bag",
+                "size_bytes": 1077520981,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-10T08:02:52+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/08-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260508105356.bag",
+                "size_bytes": 1050156583,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-10T08:02:53+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/08-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260508105503.bag",
+                "size_bytes": 920652720,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-10T08:02:53+00:00"
+              }
+            ],
+            "child_prefixes_sampled": [],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/19-05-26/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [
+              {
+                "key": "raw-feed/egocentric/19-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260518203706.bag",
+                "size_bytes": 915423325,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-20T13:50:39+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/19-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260518203813.bag",
+                "size_bytes": 916090524,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-20T13:50:39+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/19-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260518203919.bag",
+                "size_bytes": 944133460,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-20T13:50:37+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/19-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260518204025.bag",
+                "size_bytes": 947514764,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-20T13:50:39+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/19-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260518204131.bag",
+                "size_bytes": 951309774,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-20T13:50:39+00:00"
+              }
+            ],
+            "child_prefixes_sampled": [],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20-05-26/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [
+              {
+                "key": "raw-feed/egocentric/20-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260520093420.bag",
+                "size_bytes": 928901474,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-20T13:50:51+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/20-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260520093526.bag",
+                "size_bytes": 935276007,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-20T13:59:09+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/20-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260520093632.bag",
+                "size_bytes": 926545212,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-20T13:59:09+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/20-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260520093738.bag",
+                "size_bytes": 943794081,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-20T13:59:09+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/20-05-26/Orbbec Gemini 2 L_CPA9B52004M_20260520093845.bag",
+                "size_bytes": 940798121,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-20T13:50:54+00:00"
+              }
+            ],
+            "child_prefixes_sampled": [],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/2026-04-30_remaining/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/2026-04-30_remaining/20260430/",
+              "raw-feed/egocentric/2026-04-30_remaining/20260504/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260413/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260413/Arranging Pens/",
+              "raw-feed/egocentric/20260413/First Aid Kit Arrangement/",
+              "raw-feed/egocentric/20260413/Pouring Water/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260414/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260414/Arranging Pens/",
+              "raw-feed/egocentric/20260414/Folding Clothes/",
+              "raw-feed/egocentric/20260414/Lentils Pouring/",
+              "raw-feed/egocentric/20260414/salt-pouring/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260416/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260416/Cutting Papers/",
+              "raw-feed/egocentric/20260416/Grating Vegetables/",
+              "raw-feed/egocentric/20260416/Peeling Vegetables/",
+              "raw-feed/egocentric/20260416/chickpeas-pouring/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260417/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260417/Arranging First Aid Kit/",
+              "raw-feed/egocentric/20260417/Arranging Socks/",
+              "raw-feed/egocentric/20260417/Bottle cap opening and closing/",
+              "raw-feed/egocentric/20260417/Glass Arrangement/",
+              "raw-feed/egocentric/20260417/Rice Pouring/",
+              "raw-feed/egocentric/20260417/Stationary Arrangement/",
+              "raw-feed/egocentric/20260417/rice-pouring/",
+              "raw-feed/egocentric/20260417/salt-pouring/",
+              "raw-feed/egocentric/20260417/spoon-arrangement/",
+              "raw-feed/egocentric/20260417/spoon_arrangement/",
+              "raw-feed/egocentric/20260417/stationary-arrangement/",
+              "raw-feed/egocentric/20260417/water pouring/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260420/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260420/Grating Vegetables/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260421/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260421/Material Arranging/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260426/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260426/Lathe machine/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260428/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260428/TestFA/",
+              "raw-feed/egocentric/20260428/TestZA/",
+              "raw-feed/egocentric/20260428/Weighing and Packing cereals/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260429/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260429/12orb5/",
+              "raw-feed/egocentric/20260429/1or17/",
+              "raw-feed/egocentric/20260429/29042026_CleaningKitchenSlabs/",
+              "raw-feed/egocentric/20260429/29042026_CleaningUtensils/",
+              "raw-feed/egocentric/20260429/29_04_2026_bedding/",
+              "raw-feed/egocentric/20260429/2or9/",
+              "raw-feed/egocentric/20260429/3or23/",
+              "raw-feed/egocentric/20260429/4or13/",
+              "raw-feed/egocentric/20260429/A12/",
+              "raw-feed/egocentric/20260429/A19/",
+              "raw-feed/egocentric/20260429/ArrangingHouseholdItems/",
+              "raw-feed/egocentric/20260429/Arranging_Bed_and_Pillow/",
+              "raw-feed/egocentric/20260429/Arranging_Sofa/",
+              "raw-feed/egocentric/20260429/Arranging_Utensils/",
+              "raw-feed/egocentric/20260429/Arranging_Wardrobe_and_stacking_pillows/",
+              "raw-feed/egocentric/20260429/CleaningKitchenSlab/",
+              "raw-feed/egocentric/20260429/Cleaning_Kitchen/",
+              "raw-feed/egocentric/20260429/Cleaning_Windows/",
+              "raw-feed/egocentric/20260429/Dusting_Furniture/",
+              "raw-feed/egocentric/20260429/FoldingClothes/",
+              "raw-feed/egocentric/20260429/Gardening/",
+              "raw-feed/egocentric/20260429/Indoor_Gardening/",
+              "raw-feed/egocentric/20260429/Sorting_Clothes/",
+              "raw-feed/egocentric/20260429/Torch_gas_welding/",
+              "raw-feed/egocentric/20260429/Watering_Plants/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260430/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260430/ArrangingHouseholdItems/",
+              "raw-feed/egocentric/20260430/Arranging_Bed_and_Pillow/",
+              "raw-feed/egocentric/20260430/Arranging_Sofa/",
+              "raw-feed/egocentric/20260430/Arranging_Utensils/",
+              "raw-feed/egocentric/20260430/Arranging_Wardrobe_and_stacking_pillows/",
+              "raw-feed/egocentric/20260430/CleaningKitchenSlab/",
+              "raw-feed/egocentric/20260430/Cleaning_Kitchen/",
+              "raw-feed/egocentric/20260430/Cleaning_Utensils/",
+              "raw-feed/egocentric/20260430/Cleaning_Windows/",
+              "raw-feed/egocentric/20260430/Cleaning_floor/",
+              "raw-feed/egocentric/20260430/Cutting_Vegetables/",
+              "raw-feed/egocentric/20260430/Dusting_Furniture/",
+              "raw-feed/egocentric/20260430/FoldingClothes/",
+              "raw-feed/egocentric/20260430/Gardening/",
+              "raw-feed/egocentric/20260430/Glass Cleaning/",
+              "raw-feed/egocentric/20260430/Indoor_Gardening/",
+              "raw-feed/egocentric/20260430/Mirror_Cleaning/",
+              "raw-feed/egocentric/20260430/Sorting_Clothes/",
+              "raw-feed/egocentric/20260430/Tea_Making/",
+              "raw-feed/egocentric/20260430/Washing_cloths_in_Washing_machine/",
+              "raw-feed/egocentric/20260430/Waterbottle_filling/",
+              "raw-feed/egocentric/20260430/Watering_Plants/",
+              "raw-feed/egocentric/20260430/arrangements_of_clothes/",
+              "raw-feed/egocentric/20260430/heating_and_serving_food/",
+              "raw-feed/egocentric/20260430/ironing_cloth/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260504/",
+            "depth": 2,
+            "truncated": true,
+            "sampled_direct_files": [
+              {
+                "key": "raw-feed/egocentric/20260504/Orbbec Gemini 2 L_CPAMC5200W4_20260504143139.bag",
+                "size_bytes": 2320403510,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-29T06:31:49+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/20260504/Orbbec Gemini 2 L_CPAMC5200W4_20260504143246.bag",
+                "size_bytes": 2358908986,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-29T06:31:49+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/20260504/Orbbec Gemini 2 L_CPAMC5200W4_20260504143352.bag",
+                "size_bytes": 2366720115,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-29T06:31:49+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/20260504/Orbbec Gemini 2 L_CPAMC5200W4_20260504143458.bag",
+                "size_bytes": 2398897623,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-29T06:31:51+00:00"
+              },
+              {
+                "key": "raw-feed/egocentric/20260504/Orbbec Gemini 2 L_CPAMC5200W4_20260504143604.bag",
+                "size_bytes": 2492671766,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-05-29T06:31:49+00:00"
+              }
+            ],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260504/04052026_CleaningUtensils/",
+              "raw-feed/egocentric/20260504/04052026_ClothFolding/",
+              "raw-feed/egocentric/20260504/04052026_FoldingClothes/",
+              "raw-feed/egocentric/20260504/04052026_MedicalKitArrangement/",
+              "raw-feed/egocentric/20260504/04052026_PickandPlace/",
+              "raw-feed/egocentric/20260504/04052026_SocksArranging/",
+              "raw-feed/egocentric/20260504/04052026_StationaryArrangement/",
+              "raw-feed/egocentric/20260504/04052026_VegetableArrangement/",
+              "raw-feed/egocentric/20260504/04052026_VegetableChopping/",
+              "raw-feed/egocentric/20260504/04052026_VegetablePeeling/",
+              "raw-feed/egocentric/20260504/04_04_2026_packing_cookies/",
+              "raw-feed/egocentric/20260504/04_05_2026_packing_cookies/",
+              "raw-feed/egocentric/20260504/04_05_2026_sealing_packets/",
+              "raw-feed/egocentric/20260504/16mcaptest/",
+              "raw-feed/egocentric/20260504/27_Mcap_Test/",
+              "raw-feed/egocentric/20260504/CleaningUtensils/",
+              "raw-feed/egocentric/20260504/LATHE_MACHINE/",
+              "raw-feed/egocentric/20260504/ScrewFitting/",
+              "raw-feed/egocentric/20260504/SocksArrangement/",
+              "raw-feed/egocentric/20260504/SugarPouring/",
+              "raw-feed/egocentric/20260504/VegetableArrangement/",
+              "raw-feed/egocentric/20260504/bandageArrangement/",
+              "raw-feed/egocentric/20260504/cleaning-utensils/",
+              "raw-feed/egocentric/20260504/cooking/",
+              "raw-feed/egocentric/20260504/frying_food/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260505/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260505/ArtandCraft/",
+              "raw-feed/egocentric/20260505/Cleaning/",
+              "raw-feed/egocentric/20260505/Cutting Clothes/",
+              "raw-feed/egocentric/20260505/CuttingVegetables/",
+              "raw-feed/egocentric/20260505/LentilsPouring/",
+              "raw-feed/egocentric/20260505/MedicalKitArrangement/",
+              "raw-feed/egocentric/20260505/NapkinFolding/",
+              "raw-feed/egocentric/20260505/PastaPouring/",
+              "raw-feed/egocentric/20260505/PeelingVegetables/",
+              "raw-feed/egocentric/20260505/RicePouring/",
+              "raw-feed/egocentric/20260505/Rice_Pouring/",
+              "raw-feed/egocentric/20260505/SaltPouring/",
+              "raw-feed/egocentric/20260505/Salt_Pouring/",
+              "raw-feed/egocentric/20260505/StationaryArrangement/",
+              "raw-feed/egocentric/20260505/Stationary_Stacking/",
+              "raw-feed/egocentric/20260505/SugarPouring/",
+              "raw-feed/egocentric/20260505/VegetableArrangement/",
+              "raw-feed/egocentric/20260505/VegetableCutting/",
+              "raw-feed/egocentric/20260505/arranging_mechanical_work/",
+              "raw-feed/egocentric/20260505/bandage-folding/",
+              "raw-feed/egocentric/20260505/dal_filtering/",
+              "raw-feed/egocentric/20260505/food/",
+              "raw-feed/egocentric/20260505/lemtils_filterin/",
+              "raw-feed/egocentric/20260505/lemtils_filtering/",
+              "raw-feed/egocentric/20260505/making_food/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260506/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260506/Cleaning/",
+              "raw-feed/egocentric/20260506/CleaningUtensils/",
+              "raw-feed/egocentric/20260506/CleaningVegetables/",
+              "raw-feed/egocentric/20260506/ClothFolding/",
+              "raw-feed/egocentric/20260506/Drawing/",
+              "raw-feed/egocentric/20260506/GratingVegetables/",
+              "raw-feed/egocentric/20260506/KeyboardCleaning/",
+              "raw-feed/egocentric/20260506/LentilsPouring/",
+              "raw-feed/egocentric/20260506/ObjectArranging/",
+              "raw-feed/egocentric/20260506/ObjectsArrangement/",
+              "raw-feed/egocentric/20260506/PastaPouring/",
+              "raw-feed/egocentric/20260506/PencilArrangement/",
+              "raw-feed/egocentric/20260506/PickandPlace/",
+              "raw-feed/egocentric/20260506/PlayingClay/",
+              "raw-feed/egocentric/20260506/RicePouring/",
+              "raw-feed/egocentric/20260506/SaltPouring/",
+              "raw-feed/egocentric/20260506/SocksArrangement/",
+              "raw-feed/egocentric/20260506/SugarPouring/",
+              "raw-feed/egocentric/20260506/VegetableArrangement/",
+              "raw-feed/egocentric/20260506/VegetableArranging/",
+              "raw-feed/egocentric/20260506/VegetableChopping/",
+              "raw-feed/egocentric/20260506/bandage-folding/",
+              "raw-feed/egocentric/20260506/c/",
+              "raw-feed/egocentric/20260506/cutting_vegetables/",
+              "raw-feed/egocentric/20260506/mechanical_arrangement/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260507/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260507/Clay/",
+              "raw-feed/egocentric/20260507/CleaningUtensils/",
+              "raw-feed/egocentric/20260507/ClothFolding/",
+              "raw-feed/egocentric/20260507/Cloth_Folding/",
+              "raw-feed/egocentric/20260507/Cloths_Folding/",
+              "raw-feed/egocentric/20260507/CupsArrangement/",
+              "raw-feed/egocentric/20260507/Drawing/",
+              "raw-feed/egocentric/20260507/FirstAidBoxArrangement/",
+              "raw-feed/egocentric/20260507/KeyboardCleaning/",
+              "raw-feed/egocentric/20260507/LentilsPouring/",
+              "raw-feed/egocentric/20260507/NapkinFolding/",
+              "raw-feed/egocentric/20260507/PlayingClay/",
+              "raw-feed/egocentric/20260507/RicePouring/",
+              "raw-feed/egocentric/20260507/SEALING_PACKETS/",
+              "raw-feed/egocentric/20260507/Sewing/",
+              "raw-feed/egocentric/20260507/SocksArrangement/",
+              "raw-feed/egocentric/20260507/StationaryArrangement/",
+              "raw-feed/egocentric/20260507/SugarPouring/",
+              "raw-feed/egocentric/20260507/VegetableArrangement/",
+              "raw-feed/egocentric/20260507/VegetableChopping/",
+              "raw-feed/egocentric/20260507/VegetableCleaning/",
+              "raw-feed/egocentric/20260507/VegetableGrater/",
+              "raw-feed/egocentric/20260507/cleaning_n_sorting_utensils/",
+              "raw-feed/egocentric/20260507/lentils_pouring/",
+              "raw-feed/egocentric/20260507/packing/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260508/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260508/08052026_Pouringlentils/",
+              "raw-feed/egocentric/20260508/BandageFolding/",
+              "raw-feed/egocentric/20260508/Cleaning/",
+              "raw-feed/egocentric/20260508/Cleaning_Vegetable/",
+              "raw-feed/egocentric/20260508/ClothFolding/",
+              "raw-feed/egocentric/20260508/Cloth_Folding/",
+              "raw-feed/egocentric/20260508/Craft/",
+              "raw-feed/egocentric/20260508/Drawing/",
+              "raw-feed/egocentric/20260508/FirstAidArrangement/",
+              "raw-feed/egocentric/20260508/Keyboard_Cleaning/",
+              "raw-feed/egocentric/20260508/Keyboard_cleaning/",
+              "raw-feed/egocentric/20260508/LentilsPouring/",
+              "raw-feed/egocentric/20260508/NapkinFolding/",
+              "raw-feed/egocentric/20260508/Pencil_arrangment/",
+              "raw-feed/egocentric/20260508/PickandPlace/",
+              "raw-feed/egocentric/20260508/Rajma_Pouring/",
+              "raw-feed/egocentric/20260508/SaltPouring/",
+              "raw-feed/egocentric/20260508/Shocks_Arrangement/",
+              "raw-feed/egocentric/20260508/SocksArrangement/",
+              "raw-feed/egocentric/20260508/StationaryArrangement/",
+              "raw-feed/egocentric/20260508/SugarPouring/",
+              "raw-feed/egocentric/20260508/Sugar_Pouring/",
+              "raw-feed/egocentric/20260508/VegetableArrangement/",
+              "raw-feed/egocentric/20260508/VegetableChopping/",
+              "raw-feed/egocentric/20260508/VegetableCleaning/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260511/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260511/Cleaning_glass__plates/",
+              "raw-feed/egocentric/20260511/Craft_Drawing/",
+              "raw-feed/egocentric/20260511/Drawing/",
+              "raw-feed/egocentric/20260511/Keyboard_Cleaning/",
+              "raw-feed/egocentric/20260511/Lentils_pouring/",
+              "raw-feed/egocentric/20260511/Pasta_Pouring/",
+              "raw-feed/egocentric/20260511/Salt_pouring/",
+              "raw-feed/egocentric/20260511/Vegetable_cutting/",
+              "raw-feed/egocentric/20260511/Wheat_Flour_Streaner/",
+              "raw-feed/egocentric/20260511/cloth_folding/",
+              "raw-feed/egocentric/20260511/clothes_folding/",
+              "raw-feed/egocentric/20260511/drawing/",
+              "raw-feed/egocentric/20260511/keyboard_cleaning/",
+              "raw-feed/egocentric/20260511/machine_reparing/",
+              "raw-feed/egocentric/20260511/medical-kit-arrangement/",
+              "raw-feed/egocentric/20260511/packing/",
+              "raw-feed/egocentric/20260511/salt_poring/",
+              "raw-feed/egocentric/20260511/silling/",
+              "raw-feed/egocentric/20260511/socks_folding/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/egocentric/20260512/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/egocentric/20260512/Drawing/",
+              "raw-feed/egocentric/20260512/Fleettest8/",
+              "raw-feed/egocentric/20260512/Keyboard_cleaning/",
+              "raw-feed/egocentric/20260512/Packing_of_Cardimom/",
+              "raw-feed/egocentric/20260512/Packing_of_Mustard/",
+              "raw-feed/egocentric/20260512/Packing_of_clove/",
+              "raw-feed/egocentric/20260512/Pasta_Pouring/",
+              "raw-feed/egocentric/20260512/Ricepouring/",
+              "raw-feed/egocentric/20260512/SUGAR_POURING/",
+              "raw-feed/egocentric/20260512/Salt_Pouring/",
+              "raw-feed/egocentric/20260512/Sealing_Of_Cardamom/",
+              "raw-feed/egocentric/20260512/Sealing_Of_Clove/",
+              "raw-feed/egocentric/20260512/Sealing_Of_Mustard/",
+              "raw-feed/egocentric/20260512/Socks_Arranging/",
+              "raw-feed/egocentric/20260512/Socks_arrangement/",
+              "raw-feed/egocentric/20260512/Vegitable_chopping/",
+              "raw-feed/egocentric/20260512/chana_pouring/",
+              "raw-feed/egocentric/20260512/cleaning/",
+              "raw-feed/egocentric/20260512/cleaning_keyboard/",
+              "raw-feed/egocentric/20260512/cloths_folding/",
+              "raw-feed/egocentric/20260512/drawing/",
+              "raw-feed/egocentric/20260512/fleettest/",
+              "raw-feed/egocentric/20260512/fleettest13/",
+              "raw-feed/egocentric/20260512/fleettest8/",
+              "raw-feed/egocentric/20260512/keyboard_cleaning/"
+            ],
+            "children": []
+          }
+        ]
+      },
+      {
+        "prefix": "raw-feed/failed-videos/",
+        "depth": 1,
+        "truncated": true,
+        "sampled_direct_files": [
+          {
+            "key": "raw-feed/failed-videos/03aeec92-1df6-480d-a573-e3f139c822f8_20260310045435.MOV",
+            "size_bytes": 437488225,
+            "extension": ".mov",
+            "data_type": "video",
+            "last_modified": "2026-05-27T09:12:09+00:00"
+          },
+          {
+            "key": "raw-feed/failed-videos/03aeec92-1df6-480d-a573-e3f139c822f8_20260310045519.MOV",
+            "size_bytes": 429762837,
+            "extension": ".mov",
+            "data_type": "video",
+            "last_modified": "2026-05-27T09:14:56+00:00"
+          },
+          {
+            "key": "raw-feed/failed-videos/03aeec92-1df6-480d-a573-e3f139c822f8_20260310045551.MOV",
+            "size_bytes": 309904897,
+            "extension": ".mov",
+            "data_type": "video",
+            "last_modified": "2026-05-27T09:17:15+00:00"
+          },
+          {
+            "key": "raw-feed/failed-videos/03aeec92-1df6-480d-a573-e3f139c822f8_20260310045621.MOV",
+            "size_bytes": 320309799,
+            "extension": ".mov",
+            "data_type": "video",
+            "last_modified": "2026-05-27T09:17:29+00:00"
+          },
+          {
+            "key": "raw-feed/failed-videos/03aeec92-1df6-480d-a573-e3f139c822f8_20260310045643.MOV",
+            "size_bytes": 323044623,
+            "extension": ".mov",
+            "data_type": "video",
+            "last_modified": "2026-05-27T09:17:43+00:00"
+          }
+        ],
+        "child_prefixes_sampled": [],
+        "children": []
+      },
+      {
+        "prefix": "raw-feed/passed-videos/",
+        "depth": 1,
+        "truncated": false,
+        "sampled_direct_files": [],
+        "child_prefixes_sampled": [],
+        "children": []
+      },
+      {
+        "prefix": "raw-feed/test-folder/",
+        "depth": 1,
+        "truncated": false,
+        "sampled_direct_files": [],
+        "child_prefixes_sampled": [
+          "raw-feed/test-folder/16-04-26/",
+          "raw-feed/test-folder/18_03_26/",
+          "raw-feed/test-folder/19_03_26/",
+          "raw-feed/test-folder/20-04-26/",
+          "raw-feed/test-folder/20_03_26/",
+          "raw-feed/test-folder/21-04-26/"
+        ],
+        "children": [
+          {
+            "prefix": "raw-feed/test-folder/16-04-26/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [
+              {
+                "key": "raw-feed/test-folder/16-04-26/20260318_110436.bag",
+                "size_bytes": 2113362021,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-04-17T15:12:10+00:00"
+              }
+            ],
+            "child_prefixes_sampled": [
+              "raw-feed/test-folder/16-04-26/Shivam/",
+              "raw-feed/test-folder/16-04-26/aditya panzade/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/test-folder/18_03_26/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/test-folder/18_03_26/Dishan/",
+              "raw-feed/test-folder/18_03_26/Fatima/",
+              "raw-feed/test-folder/18_03_26/pankaj/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/test-folder/19_03_26/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/test-folder/19_03_26/Pankaj/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/test-folder/20-04-26/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/test-folder/20-04-26/Commercial data/",
+              "raw-feed/test-folder/20-04-26/Dipali/",
+              "raw-feed/test-folder/20-04-26/Gauri Jadhav/",
+              "raw-feed/test-folder/20-04-26/Kunal/",
+              "raw-feed/test-folder/20-04-26/Varun/",
+              "raw-feed/test-folder/20-04-26/Vidushe/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/test-folder/20_03_26/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [
+              {
+                "key": "raw-feed/test-folder/20_03_26/20260320_115416.bag",
+                "size_bytes": 2080151468,
+                "extension": ".bag",
+                "data_type": "robotics log",
+                "last_modified": "2026-03-20T10:39:43+00:00"
+              }
+            ],
+            "child_prefixes_sampled": [],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/test-folder/21-04-26/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/test-folder/21-04-26/Pankaj /",
+              "raw-feed/test-folder/21-04-26/Vidushe and Vansha/"
+            ],
+            "children": []
+          }
+        ]
+      },
+      {
+        "prefix": "raw-feed/trossen-data-stationary/",
+        "depth": 1,
+        "truncated": false,
+        "sampled_direct_files": [],
+        "child_prefixes_sampled": [
+          "raw-feed/trossen-data-stationary/Coil wire 2/",
+          "raw-feed/trossen-data-stationary/Coil wire/"
+        ],
+        "children": [
+          {
+            "prefix": "raw-feed/trossen-data-stationary/Coil wire 2/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/trossen-data-stationary/Coil wire/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data-stationary/Coil wire/Industrial/"
+            ],
+            "children": []
+          }
+        ]
+      },
+      {
+        "prefix": "raw-feed/trossen-data/",
+        "depth": 1,
+        "truncated": false,
+        "sampled_direct_files": [],
+        "child_prefixes_sampled": [
+          "raw-feed/trossen-data/Batteries/",
+          "raw-feed/trossen-data/Coil wire/",
+          "raw-feed/trossen-data/Fridge/",
+          "raw-feed/trossen-data/Microfiber towels/",
+          "raw-feed/trossen-data/Pick n Place tools/",
+          "raw-feed/trossen-data/Plug ethernet cable into network device 2/",
+          "raw-feed/trossen-data/Plug ethernet cable into network device/",
+          "raw-feed/trossen-data/Plug ethernet cable into network switch 3/",
+          "raw-feed/trossen-data/Pour Coffee 2/",
+          "raw-feed/trossen-data/Pour Coffee/",
+          "raw-feed/trossen-data/Pour nuts & bolts/",
+          "raw-feed/trossen-data/Sort glue by type/",
+          "raw-feed/trossen-data/Sort tape & safety glasses (2)/"
+        ],
+        "children": [
+          {
+            "prefix": "raw-feed/trossen-data/Batteries/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data/Batteries/Industrial/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/trossen-data/Coil wire/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data/Coil wire/Industrial/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/trossen-data/Fridge/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data/Fridge/Kitchen/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/trossen-data/Microfiber towels/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data/Microfiber towels/Kichen/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/trossen-data/Pick n Place tools/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data/Pick n Place tools/Industrial/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/trossen-data/Plug ethernet cable into network device 2/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data/Plug ethernet cable into network device 2/Industrial/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/trossen-data/Plug ethernet cable into network device/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data/Plug ethernet cable into network device/Industrial/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/trossen-data/Plug ethernet cable into network switch 3/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data/Plug ethernet cable into network switch 3/Industrial/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/trossen-data/Pour Coffee 2/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data/Pour Coffee 2/Kitchen/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/trossen-data/Pour Coffee/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data/Pour Coffee/Kitchen/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/trossen-data/Pour nuts & bolts/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data/Pour nuts & bolts/Industrial/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/trossen-data/Sort glue by type/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data/Sort glue by type/Industrial/"
+            ],
+            "children": []
+          },
+          {
+            "prefix": "raw-feed/trossen-data/Sort tape & safety glasses (2)/",
+            "depth": 2,
+            "truncated": false,
+            "sampled_direct_files": [],
+            "child_prefixes_sampled": [
+              "raw-feed/trossen-data/Sort tape & safety glasses (2)/Industrial/"
+            ],
+            "children": []
+          }
+        ]
+      }
+    ]
+  },
+  "recursive_samples": [
+    {
+      "prefix": "raw-feed/anvil-data/",
+      "sampled_object_count": 15,
+      "sampled_total_size_bytes": 4450744108,
+      "hit_limit": false,
+      "limit": 300,
+      "data_type_counts": {
+        "metadata/text": 8,
+        "metadata/config": 4,
+        "robotics log": 3
+      },
+      "extension_counts": {
+        ".json": 8,
+        ".yaml": 4,
+        ".mcap": 3
+      },
+      "sample_objects": [
+        {
+          "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-27/0001/dataset_metadata.json",
+          "size_bytes": 371,
+          "extension": ".json",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-27T18:44:37+00:00"
+        },
+        {
+          "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-27/0001/metadata.json",
+          "size_bytes": 73,
+          "extension": ".json",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-27T18:44:37+00:00"
+        },
+        {
+          "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-27/0001/metadata.yaml",
+          "size_bytes": 2307,
+          "extension": ".yaml",
+          "data_type": "metadata/config",
+          "last_modified": "2026-05-27T18:44:37+00:00"
+        },
+        {
+          "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001/0001_0.mcap",
+          "size_bytes": 1654012654,
+          "extension": ".mcap",
+          "data_type": "robotics log",
+          "last_modified": "2026-05-28T16:59:07+00:00"
+        },
+        {
+          "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001/dataset_metadata.json",
+          "size_bytes": 371,
+          "extension": ".json",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-28T16:59:07+00:00"
+        },
+        {
+          "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001/metadata.json",
+          "size_bytes": 73,
+          "extension": ".json",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-28T16:59:07+00:00"
+        },
+        {
+          "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001/metadata.yaml",
+          "size_bytes": 2307,
+          "extension": ".yaml",
+          "data_type": "metadata/config",
+          "last_modified": "2026-05-28T16:59:07+00:00"
+        },
+        {
+          "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001_b0f9c915/0001_0.mcap",
+          "size_bytes": 1142707794,
+          "extension": ".mcap",
+          "data_type": "robotics log",
+          "last_modified": "2026-05-28T19:06:48+00:00"
+        },
+        {
+          "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001_b0f9c915/dataset_metadata.json",
+          "size_bytes": 373,
+          "extension": ".json",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-28T19:06:47+00:00"
+        },
+        {
+          "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001_b0f9c915/metadata.json",
+          "size_bytes": 73,
+          "extension": ".json",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-28T19:06:47+00:00"
+        },
+        {
+          "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001_b0f9c915/metadata.yaml",
+          "size_bytes": 2307,
+          "extension": ".yaml",
+          "data_type": "metadata/config",
+          "last_modified": "2026-05-28T19:06:48+00:00"
+        },
+        {
+          "key": "raw-feed/anvil-data/anvil upload test/Kitchen/dhriti_dubey/2026-05-28/0001/0001_0.mcap",
+          "size_bytes": 1654012654,
+          "extension": ".mcap",
+          "data_type": "robotics log",
+          "last_modified": "2026-05-28T09:41:44+00:00"
+        },
+        {
+          "key": "raw-feed/anvil-data/anvil upload test/Kitchen/dhriti_dubey/2026-05-28/0001/dataset_metadata.json",
+          "size_bytes": 371,
+          "extension": ".json",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-28T09:41:42+00:00"
+        },
+        {
+          "key": "raw-feed/anvil-data/anvil upload test/Kitchen/dhriti_dubey/2026-05-28/0001/metadata.json",
+          "size_bytes": 73,
+          "extension": ".json",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-28T09:41:44+00:00"
+        },
+        {
+          "key": "raw-feed/anvil-data/anvil upload test/Kitchen/dhriti_dubey/2026-05-28/0001/metadata.yaml",
+          "size_bytes": 2307,
+          "extension": ".yaml",
+          "data_type": "metadata/config",
+          "last_modified": "2026-05-28T09:41:44+00:00"
+        }
+      ]
+    },
+    {
+      "prefix": "raw-feed/egocentric/",
+      "sampled_object_count": 300,
+      "sampled_total_size_bytes": 296279509618,
+      "hit_limit": true,
+      "limit": 300,
+      "data_type_counts": {
+        "robotics log": 300
+      },
+      "extension_counts": {
+        ".bag": 300
+      },
+      "sample_objects": [
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601145727.bag",
+          "size_bytes": 103895846,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T19:36:51+00:00"
+        },
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601145918.bag",
+          "size_bytes": 973296029,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T20:23:15+00:00"
+        },
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601150024.bag",
+          "size_bytes": 976379319,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T19:36:52+00:00"
+        },
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601150130.bag",
+          "size_bytes": 972860676,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T20:23:14+00:00"
+        },
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601150237.bag",
+          "size_bytes": 976613206,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T20:23:14+00:00"
+        },
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601150343.bag",
+          "size_bytes": 972960344,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T19:37:08+00:00"
+        },
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601150449.bag",
+          "size_bytes": 978073469,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T19:41:24+00:00"
+        },
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601150555.bag",
+          "size_bytes": 961177457,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T19:47:32+00:00"
+        },
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601150702.bag",
+          "size_bytes": 966300700,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T19:53:28+00:00"
+        },
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601150808.bag",
+          "size_bytes": 961421738,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T19:59:09+00:00"
+        },
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601150914.bag",
+          "size_bytes": 956759785,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T20:04:43+00:00"
+        },
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601151020.bag",
+          "size_bytes": 951754330,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T20:10:17+00:00"
+        },
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601151126.bag",
+          "size_bytes": 946701571,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T20:15:32+00:00"
+        },
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601151233.bag",
+          "size_bytes": 938301953,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T20:20:58+00:00"
+        },
+        {
+          "key": "raw-feed/egocentric/01-06-26/Orbbec Gemini 2 L_CPA9B52004M_20260601151339.bag",
+          "size_bytes": 953766881,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-06-01T20:40:14+00:00"
+        }
+      ]
+    },
+    {
+      "prefix": "raw-feed/failed-videos/",
+      "sampled_object_count": 300,
+      "sampled_total_size_bytes": 36130693280,
+      "hit_limit": true,
+      "limit": 300,
+      "data_type_counts": {
+        "video": 300
+      },
+      "extension_counts": {
+        ".mp4": 236,
+        ".mov": 64
+      },
+      "sample_objects": [
+        {
+          "key": "raw-feed/failed-videos/03aeec92-1df6-480d-a573-e3f139c822f8_20260310045435.MOV",
+          "size_bytes": 437488225,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:12:09+00:00"
+        },
+        {
+          "key": "raw-feed/failed-videos/03aeec92-1df6-480d-a573-e3f139c822f8_20260310045519.MOV",
+          "size_bytes": 429762837,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:14:56+00:00"
+        },
+        {
+          "key": "raw-feed/failed-videos/03aeec92-1df6-480d-a573-e3f139c822f8_20260310045551.MOV",
+          "size_bytes": 309904897,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:17:15+00:00"
+        },
+        {
+          "key": "raw-feed/failed-videos/03aeec92-1df6-480d-a573-e3f139c822f8_20260310045621.MOV",
+          "size_bytes": 320309799,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:17:29+00:00"
+        },
+        {
+          "key": "raw-feed/failed-videos/03aeec92-1df6-480d-a573-e3f139c822f8_20260310045643.MOV",
+          "size_bytes": 323044623,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:17:43+00:00"
+        },
+        {
+          "key": "raw-feed/failed-videos/03aeec92-1df6-480d-a573-e3f139c822f8_20260310045706.MOV",
+          "size_bytes": 303421420,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:12:33+00:00"
+        },
+        {
+          "key": "raw-feed/failed-videos/03aeec92-1df6-480d-a573-e3f139c822f8_20260310045720.MOV",
+          "size_bytes": 130179668,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:12:47+00:00"
+        },
+        {
+          "key": "raw-feed/failed-videos/03e62fcc-e8d9-4559-becb-b87d86740484_20260312104828.MOV",
+          "size_bytes": 124567205,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:12:53+00:00"
+        },
+        {
+          "key": "raw-feed/failed-videos/03e62fcc-e8d9-4559-becb-b87d86740484_20260312104904.MOV",
+          "size_bytes": 117088600,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:13:00+00:00"
+        },
+        {
+          "key": "raw-feed/failed-videos/03e62fcc-e8d9-4559-becb-b87d86740484_20260312105000.MOV",
+          "size_bytes": 117088600,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:13:05+00:00"
+        },
+        {
+          "key": "raw-feed/failed-videos/03e62fcc-e8d9-4559-becb-b87d86740484_20260312105245.MOV",
+          "size_bytes": 120905769,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:13:11+00:00"
+        },
+        {
+          "key": "raw-feed/failed-videos/03e62fcc-e8d9-4559-becb-b87d86740484_20260312105350.MOV",
+          "size_bytes": 120905769,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:13:17+00:00"
+        },
+        {
+          "key": "raw-feed/failed-videos/03e62fcc-e8d9-4559-becb-b87d86740484_20260312105741.MOV",
+          "size_bytes": 121172903,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:13:22+00:00"
+        },
+        {
+          "key": "raw-feed/failed-videos/03e62fcc-e8d9-4559-becb-b87d86740484_20260312111058.MOV",
+          "size_bytes": 121172903,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:13:29+00:00"
+        },
+        {
+          "key": "raw-feed/failed-videos/05645210-9684-4e69-ba67-6b4cb82157f9_20260313082521.MOV",
+          "size_bytes": 90627267,
+          "extension": ".mov",
+          "data_type": "video",
+          "last_modified": "2026-05-27T09:13:34+00:00"
+        }
+      ]
+    },
+    {
+      "prefix": "raw-feed/passed-videos/",
+      "sampled_object_count": 0,
+      "sampled_total_size_bytes": 0,
+      "hit_limit": false,
+      "limit": 300,
+      "data_type_counts": {},
+      "extension_counts": {},
+      "sample_objects": []
+    },
+    {
+      "prefix": "raw-feed/test-folder/",
+      "sampled_object_count": 234,
+      "sampled_total_size_bytes": 343174826858,
+      "hit_limit": false,
+      "limit": 300,
+      "data_type_counts": {
+        "robotics log": 234
+      },
+      "extension_counts": {
+        ".bag": 234
+      },
+      "sample_objects": [
+        {
+          "key": "raw-feed/test-folder/16-04-26/20260318_110436.bag",
+          "size_bytes": 2113362021,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-04-17T15:12:10+00:00"
+        },
+        {
+          "key": "raw-feed/test-folder/16-04-26/Shivam/Rice Pouring/Orbbec Gemini 2 L_CPAMC5200TR_20260416110429.bag",
+          "size_bytes": 77478675,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-04-20T18:55:01+00:00"
+        },
+        {
+          "key": "raw-feed/test-folder/16-04-26/Shivam/Rice Pouring/Orbbec Gemini 2 L_CPAMC5200TR_20260416110452.bag",
+          "size_bytes": 1049609589,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-04-20T18:55:01+00:00"
+        },
+        {
+          "key": "raw-feed/test-folder/16-04-26/aditya panzade/task chickpeas/Orbbec Gemini 2 L_CPAMC5200TR_20260416120140.bag",
+          "size_bytes": 105682843,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-04-20T18:55:15+00:00"
+        },
+        {
+          "key": "raw-feed/test-folder/16-04-26/aditya panzade/task chickpeas/Orbbec Gemini 2 L_CPAMC5200TR_20260416120157.bag",
+          "size_bytes": 132025081,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-04-20T18:55:17+00:00"
+        },
+        {
+          "key": "raw-feed/test-folder/16-04-26/aditya panzade/task chickpeas/Orbbec Gemini 2 L_CPAMC5200TR_20260416120240.bag",
+          "size_bytes": 223259343,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-04-20T18:55:19+00:00"
+        },
+        {
+          "key": "raw-feed/test-folder/18_03_26/Dishan/Transfering lentils to bowl/20260318_125539.bag",
+          "size_bytes": 1996849811,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-03-19T08:15:41+00:00"
+        },
+        {
+          "key": "raw-feed/test-folder/18_03_26/pankaj/Lentils arrangement/20260318_171155.bag",
+          "size_bytes": 1860017166,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-03-22T21:02:44+00:00"
+        },
+        {
+          "key": "raw-feed/test-folder/18_03_26/pankaj/Lentils arrangement/20260318_171302.bag",
+          "size_bytes": 1855737996,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-03-22T21:02:44+00:00"
+        },
+        {
+          "key": "raw-feed/test-folder/18_03_26/pankaj/Lentils arrangement/20260318_171408.bag",
+          "size_bytes": 1851462747,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-03-22T21:02:44+00:00"
+        },
+        {
+          "key": "raw-feed/test-folder/18_03_26/pankaj/Lentils arrangement/20260318_171514.bag",
+          "size_bytes": 1847326226,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-03-22T21:02:44+00:00"
+        },
+        {
+          "key": "raw-feed/test-folder/18_03_26/pankaj/Lentils arrangement/20260318_171621.bag",
+          "size_bytes": 1861620537,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-03-22T21:02:44+00:00"
+        },
+        {
+          "key": "raw-feed/test-folder/18_03_26/pankaj/Lentils arrangement/20260318_171727.bag",
+          "size_bytes": 1875468984,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-03-22T21:02:44+00:00"
+        },
+        {
+          "key": "raw-feed/test-folder/18_03_26/pankaj/Lentils arrangement/20260318_171833.bag",
+          "size_bytes": 1895648573,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-03-22T21:02:44+00:00"
+        },
+        {
+          "key": "raw-feed/test-folder/18_03_26/pankaj/Lentils arrangement/20260318_171939.bag",
+          "size_bytes": 1896157813,
+          "extension": ".bag",
+          "data_type": "robotics log",
+          "last_modified": "2026-03-22T21:02:44+00:00"
+        }
+      ]
+    },
+    {
+      "prefix": "raw-feed/trossen-data-stationary/",
+      "sampled_object_count": 300,
+      "sampled_total_size_bytes": 7445332757,
+      "hit_limit": true,
+      "limit": 300,
+      "data_type_counts": {
+        "metadata/text": 134,
+        "video": 132,
+        "metadata/tabular": 34
+      },
+      "extension_counts": {
+        ".mp4": 132,
+        ".jsonl": 101,
+        ".parquet": 34,
+        ".json": 33
+      },
+      "sample_objects": [
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000000/data/chunk-000/episode_000000.parquet",
+          "size_bytes": 218483,
+          "extension": ".parquet",
+          "data_type": "metadata/tabular",
+          "last_modified": "2026-06-02T15:29:22+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000000/meta/episodes.jsonl",
+          "size_bytes": 9969,
+          "extension": ".jsonl",
+          "data_type": "metadata/text",
+          "last_modified": "2026-06-02T15:29:21+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000000/meta/episodes_stats.jsonl",
+          "size_bytes": 588582,
+          "extension": ".jsonl",
+          "data_type": "metadata/text",
+          "last_modified": "2026-06-02T15:29:21+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000000/meta/info.json",
+          "size_bytes": 5069,
+          "extension": ".json",
+          "data_type": "metadata/text",
+          "last_modified": "2026-06-02T15:29:21+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000000/meta/tasks.jsonl",
+          "size_bytes": 48,
+          "extension": ".jsonl",
+          "data_type": "metadata/text",
+          "last_modified": "2026-06-02T15:29:21+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000000/videos/chunk-000/observation.images.cam_high/episode_000000.mp4",
+          "size_bytes": 34511944,
+          "extension": ".mp4",
+          "data_type": "video",
+          "last_modified": "2026-06-02T15:29:22+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000000/videos/chunk-000/observation.images.cam_left_wrist/episode_000000.mp4",
+          "size_bytes": 30632735,
+          "extension": ".mp4",
+          "data_type": "video",
+          "last_modified": "2026-06-02T15:29:22+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000000/videos/chunk-000/observation.images.cam_low/episode_000000.mp4",
+          "size_bytes": 30842251,
+          "extension": ".mp4",
+          "data_type": "video",
+          "last_modified": "2026-06-02T15:29:22+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000000/videos/chunk-000/observation.images.cam_right_wrist/episode_000000.mp4",
+          "size_bytes": 30393999,
+          "extension": ".mp4",
+          "data_type": "video",
+          "last_modified": "2026-06-02T15:29:22+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000001/data/chunk-000/episode_000001.parquet",
+          "size_bytes": 400467,
+          "extension": ".parquet",
+          "data_type": "metadata/tabular",
+          "last_modified": "2026-06-02T15:29:25+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000001/meta/episodes.jsonl",
+          "size_bytes": 9969,
+          "extension": ".jsonl",
+          "data_type": "metadata/text",
+          "last_modified": "2026-06-02T15:29:24+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000001/meta/episodes_stats.jsonl",
+          "size_bytes": 588582,
+          "extension": ".jsonl",
+          "data_type": "metadata/text",
+          "last_modified": "2026-06-02T15:29:25+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000001/meta/info.json",
+          "size_bytes": 5069,
+          "extension": ".json",
+          "data_type": "metadata/text",
+          "last_modified": "2026-06-02T15:29:24+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000001/meta/tasks.jsonl",
+          "size_bytes": 48,
+          "extension": ".jsonl",
+          "data_type": "metadata/text",
+          "last_modified": "2026-06-02T15:29:24+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data-stationary/Coil wire 2/Industrial/Fernando_None/2026-06-02/episode_000001/videos/chunk-000/observation.images.cam_high/episode_000001.mp4",
+          "size_bytes": 62652135,
+          "extension": ".mp4",
+          "data_type": "video",
+          "last_modified": "2026-06-02T15:29:26+00:00"
+        }
+      ]
+    },
+    {
+      "prefix": "raw-feed/trossen-data/",
+      "sampled_object_count": 300,
+      "sampled_total_size_bytes": 4248189027,
+      "hit_limit": true,
+      "limit": 300,
+      "data_type_counts": {
+        "metadata/text": 151,
+        "video": 111,
+        "metadata/tabular": 38
+      },
+      "extension_counts": {
+        ".jsonl": 113,
+        ".mp4": 111,
+        ".parquet": 38,
+        ".json": 38
+      },
+      "sample_objects": [
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000000/data/chunk-000/episode_000000.parquet",
+          "size_bytes": 146434,
+          "extension": ".parquet",
+          "data_type": "metadata/tabular",
+          "last_modified": "2026-05-08T22:51:56+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000000/meta/episodes.jsonl",
+          "size_bytes": 5772,
+          "extension": ".jsonl",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-08T22:51:55+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000000/meta/episodes_stats.jsonl",
+          "size_bytes": 252208,
+          "extension": ".jsonl",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-08T22:51:55+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000000/meta/info.json",
+          "size_bytes": 4547,
+          "extension": ".json",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-08T22:51:54+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000000/meta/tasks.jsonl",
+          "size_bytes": 75,
+          "extension": ".jsonl",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-08T22:51:54+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000000/videos/chunk-000/observation.images.cam_high/episode_000000.mp4",
+          "size_bytes": 38999284,
+          "extension": ".mp4",
+          "data_type": "video",
+          "last_modified": "2026-05-08T22:51:58+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000000/videos/chunk-000/observation.images.cam_left_wrist/episode_000000.mp4",
+          "size_bytes": 9314300,
+          "extension": ".mp4",
+          "data_type": "video",
+          "last_modified": "2026-05-08T22:51:59+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000000/videos/chunk-000/observation.images.cam_right_wrist/episode_000000.mp4",
+          "size_bytes": 38128238,
+          "extension": ".mp4",
+          "data_type": "video",
+          "last_modified": "2026-05-08T22:51:57+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000001/data/chunk-000/episode_000001.parquet",
+          "size_bytes": 132949,
+          "extension": ".parquet",
+          "data_type": "metadata/tabular",
+          "last_modified": "2026-05-08T22:52:02+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000001/meta/episodes.jsonl",
+          "size_bytes": 5772,
+          "extension": ".jsonl",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-08T22:52:01+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000001/meta/episodes_stats.jsonl",
+          "size_bytes": 252208,
+          "extension": ".jsonl",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-08T22:52:02+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000001/meta/info.json",
+          "size_bytes": 4547,
+          "extension": ".json",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-08T22:52:00+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000001/meta/tasks.jsonl",
+          "size_bytes": 75,
+          "extension": ".jsonl",
+          "data_type": "metadata/text",
+          "last_modified": "2026-05-08T22:52:01+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000001/videos/chunk-000/observation.images.cam_high/episode_000001.mp4",
+          "size_bytes": 40785764,
+          "extension": ".mp4",
+          "data_type": "video",
+          "last_modified": "2026-05-08T22:52:04+00:00"
+        },
+        {
+          "key": "raw-feed/trossen-data/Batteries/Industrial/Sofia_Infante/2026-05-08/episode_000001/videos/chunk-000/observation.images.cam_left_wrist/episode_000001.mp4",
+          "size_bytes": 5693849,
+          "extension": ".mp4",
+          "data_type": "video",
+          "last_modified": "2026-05-08T22:52:05+00:00"
+        }
+      ]
+    }
+  ],
+  "combined_recursive_sample": {
+    "sampled_object_count": 1449,
+    "sampled_total_size_bytes": 691729295648,
+    "hit_limit": false,
+    "limit": 2000,
+    "data_type_counts": {
+      "video": 543,
+      "robotics log": 537,
+      "metadata/text": 293,
+      "metadata/tabular": 72,
+      "metadata/config": 4
+    },
+    "extension_counts": {
+      ".bag": 534,
+      ".mp4": 479,
+      ".jsonl": 214,
+      ".json": 79,
+      ".parquet": 72,
+      ".mov": 64,
+      ".yaml": 4,
+      ".mcap": 3
+    },
+    "sample_objects": [
+      {
+        "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-27/0001/dataset_metadata.json",
+        "size_bytes": 371,
+        "extension": ".json",
+        "data_type": "metadata/text",
+        "last_modified": "2026-05-27T18:44:37+00:00"
+      },
+      {
+        "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-27/0001/metadata.json",
+        "size_bytes": 73,
+        "extension": ".json",
+        "data_type": "metadata/text",
+        "last_modified": "2026-05-27T18:44:37+00:00"
+      },
+      {
+        "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-27/0001/metadata.yaml",
+        "size_bytes": 2307,
+        "extension": ".yaml",
+        "data_type": "metadata/config",
+        "last_modified": "2026-05-27T18:44:37+00:00"
+      },
+      {
+        "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001/0001_0.mcap",
+        "size_bytes": 1654012654,
+        "extension": ".mcap",
+        "data_type": "robotics log",
+        "last_modified": "2026-05-28T16:59:07+00:00"
+      },
+      {
+        "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001/dataset_metadata.json",
+        "size_bytes": 371,
+        "extension": ".json",
+        "data_type": "metadata/text",
+        "last_modified": "2026-05-28T16:59:07+00:00"
+      },
+      {
+        "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001/metadata.json",
+        "size_bytes": 73,
+        "extension": ".json",
+        "data_type": "metadata/text",
+        "last_modified": "2026-05-28T16:59:07+00:00"
+      },
+      {
+        "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001/metadata.yaml",
+        "size_bytes": 2307,
+        "extension": ".yaml",
+        "data_type": "metadata/config",
+        "last_modified": "2026-05-28T16:59:07+00:00"
+      },
+      {
+        "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001_b0f9c915/0001_0.mcap",
+        "size_bytes": 1142707794,
+        "extension": ".mcap",
+        "data_type": "robotics log",
+        "last_modified": "2026-05-28T19:06:48+00:00"
+      },
+      {
+        "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001_b0f9c915/dataset_metadata.json",
+        "size_bytes": 373,
+        "extension": ".json",
+        "data_type": "metadata/text",
+        "last_modified": "2026-05-28T19:06:47+00:00"
+      },
+      {
+        "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001_b0f9c915/metadata.json",
+        "size_bytes": 73,
+        "extension": ".json",
+        "data_type": "metadata/text",
+        "last_modified": "2026-05-28T19:06:47+00:00"
+      },
+      {
+        "key": "raw-feed/anvil-data/anvil test/Kitchen/Sofia_Infante/2026-05-28/0001_b0f9c915/metadata.yaml",
+        "size_bytes": 2307,
+        "extension": ".yaml",
+        "data_type": "metadata/config",
+        "last_modified": "2026-05-28T19:06:48+00:00"
+      },
+      {
+        "key": "raw-feed/anvil-data/anvil upload test/Kitchen/dhriti_dubey/2026-05-28/0001/0001_0.mcap",
+        "size_bytes": 1654012654,
+        "extension": ".mcap",
+        "data_type": "robotics log",
+        "last_modified": "2026-05-28T09:41:44+00:00"
+      },
+      {
+        "key": "raw-feed/anvil-data/anvil upload test/Kitchen/dhriti_dubey/2026-05-28/0001/dataset_metadata.json",
+        "size_bytes": 371,
+        "extension": ".json",
+        "data_type": "metadata/text",
+        "last_modified": "2026-05-28T09:41:42+00:00"
+      },
+      {
+        "key": "raw-feed/anvil-data/anvil upload test/Kitchen/dhriti_dubey/2026-05-28/0001/metadata.json",
+        "size_bytes": 73,
+        "extension": ".json",
+        "data_type": "metadata/text",
+        "last_modified": "2026-05-28T09:41:44+00:00"
+      },
+      {
+        "key": "raw-feed/anvil-data/anvil upload test/Kitchen/dhriti_dubey/2026-05-28/0001/metadata.yaml",
+        "size_bytes": 2307,
+        "extension": ".yaml",
+        "data_type": "metadata/config",
+        "last_modified": "2026-05-28T09:41:44+00:00"
+      }
+    ]
+  },
+  "notes": [
+    "The tree uses delimiter-based S3 prefix listings.",
+    "Nodes marked truncated contain additional files or folders beyond the configured sample limits.",
+    "Recursive samples are balanced by top-level prefix to avoid committing repetitive full-bucket listings."
+  ]
+}
