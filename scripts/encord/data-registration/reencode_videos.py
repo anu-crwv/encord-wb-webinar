@@ -48,6 +48,11 @@ BULK_GET_CHUNK_SIZE = 500
 LINK_CHUNK_SIZE = 1_000
 REQUEST_TIMEOUT = (30, 300)
 UPLOAD_SETTINGS = CloudUploadSettings(max_retries=5, backoff_factor=1.0, allow_failures=False)
+UNSUPPORTED_CLOUD_SYNCED_UPLOAD = "uploading files to cloud synced folder"
+UNSUPPORTED_CLOUD_SYNCED_HINT = (
+    "Target folder is a Cloud Synced Folder. Encord direct uploads are not supported there; "
+    "upload the re-encoded files to the backing cloud location and re-sync, or use a regular storage folder."
+)
 
 
 @dataclass(frozen=True)
@@ -280,6 +285,10 @@ def run_ffmpeg(input_path: Path, output_path: Path) -> str:
     raise RuntimeError(f"ffmpeg failed: {stderr[-2000:]}")
 
 
+def is_unsupported_cloud_synced_upload(error: str) -> bool:
+    return UNSUPPORTED_CLOUD_SYNCED_UPLOAD in error.lower()
+
+
 def process_video(job: VideoJob, root: Path | None) -> ProcessedVideo:
     title = job.source_title
     new_title = reencoded_title(title)
@@ -329,13 +338,26 @@ def process_jobs(jobs: list[VideoJob], workers: int, root: Path | None) -> tuple
             try:
                 processed.append(future.result())
             except Exception as exc:  # noqa: BLE001 - one bad video should not stop the batch.
+                error = str(exc)
                 failed.append(
                     {
                         "source_item_uuid": str(job.item.uuid),
                         "title": job.source_title,
-                        "error": str(exc),
+                        "error": error,
                     }
                 )
+                if is_unsupported_cloud_synced_upload(error):
+                    cancelled = sum(1 for pending in futures if pending is not future and pending.cancel())
+                    failed.append(
+                        {
+                            "reason": "cancelled_after_unsupported_cloud_synced_target",
+                            "cancelled_jobs": str(cancelled),
+                            "error": UNSUPPORTED_CLOUD_SYNCED_HINT,
+                        }
+                    )
+                    progress.set_postfix(uploaded=len(processed), failed=len(failed))
+                    progress.close()
+                    break
             progress.set_postfix(uploaded=len(processed), failed=len(failed))
 
     return processed, failed
