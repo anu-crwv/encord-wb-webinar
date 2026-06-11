@@ -1,7 +1,7 @@
-# Label Export
+# Label Overlay Export
 
-Exports one Encord project's single-view caption labels to a W&B labels artifact that overlays the
-3-camera dataset artifact.
+Exports one Encord project's single-view caption labels to a W&B label overlay artifact that materializes
+with the 3-camera source dataset artifact.
 
 The exporter reuses the source episode parquet files from S3 for state/action/timing data, then rewrites
 the task and language annotation columns from Encord captions. It does not fabricate state/action values.
@@ -24,7 +24,7 @@ Edit W&B settings:
 scripts/encord/wandb_config.yaml
 ```
 
-## Export Labels To W&B
+## Export Label Overlay To W&B
 
 ```bash
 uv run --script scripts/encord/label-export/export_single_view_labels_to_wandb.py \
@@ -43,13 +43,13 @@ exports/encord-label-export/<timestamp>/
 
 Logs:
 
-- labels artifact with `dataset/data/...` and `dataset/meta/...`
+- label overlay artifact with `dataset/data/...` and `dataset/meta/...`
 - preview table with `language_instruction`
 
 The W&B artifact type is `dataset` because W&B artifact names cannot change type after creation, and this
 overlay is materialized as a dataset fragment.
 
-The labels artifact is intended to be materialized together with the source dataset artifact:
+The label overlay artifact is intended to be materialized together with the source dataset artifact:
 
 ```text
 encord-source-data:vN + encord-single-view-labels:vM => local dataset/
@@ -61,7 +61,7 @@ The source dataset artifact provides:
 dataset/videos/...
 ```
 
-The labels artifact provides:
+The label overlay artifact provides:
 
 ```text
 dataset/data/chunk-000/episode_000000.parquet
@@ -73,11 +73,3 @@ dataset/meta/episodes.jsonl
 Each output parquet preserves the source columns such as `action`, `observation.state`, `timestamp`,
 and `frame_index`, then fills `task_index` and the `annotation.language.language_instruction{,_2,_3}`
 columns from the Encord caption.
-
-## Convert Captions To DROID Layout
-
-```bash
-uv run --script scripts/encord/label-export/export_encord_captions_to_droid.py --help
-```
-
-Use this for local DROID/LeRobot-style label files, not W&B versioning.

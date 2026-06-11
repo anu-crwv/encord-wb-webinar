@@ -657,7 +657,7 @@ def log_to_wandb(
     manifest_path = output_dir / "label_export_manifest.json"
     manifest = json.loads(manifest_path.read_text())
     run_name = (
-        f"encord-labels-{label_name}-"
+        f"encord-label-overlay-{label_name}-"
         f"{str(manifest.get('encord_project_hash') or 'unknown')[:8]}-"
         f"{manifest.get('label_episode_count', 0)}eps"
     )
@@ -667,7 +667,7 @@ def log_to_wandb(
         typer.echo(f"Using source dataset artifact {source_artifact_ref}.")
         run.use_artifact(source_artifact_ref)
 
-        typer.echo(f"Logging labels artifact {label_name}...")
+        typer.echo(f"Logging label overlay artifact {label_name}...")
         label_artifact = wandb.Artifact(
             label_name,
             type="dataset",
@@ -691,7 +691,7 @@ def log_to_wandb(
         logged_labels = run.log_artifact(label_artifact, aliases=["latest", "single-view"])
         logged_labels.wait()
         labels_ref = f"{label_name}:{logged_labels.version}"
-        typer.echo(f"Logged labels artifact {labels_ref}.")
+        typer.echo(f"Logged label overlay artifact {labels_ref}.")
 
         typer.echo("Logging preview table...")
         table = wandb.Table(columns=[
@@ -727,7 +727,7 @@ def main(
     metadata_yaml: Annotated[Path, typer.Option(help="Required YAML notes for this dataset/label version.")],
     source_artifact_ref: Annotated[
         str,
-        typer.Option(help="Required W&B dataset artifact this labels artifact overlays."),
+        typer.Option(help="Required W&B dataset artifact this label overlay materializes with."),
     ],
     wandb_config: Annotated[Path, typer.Option(help="W&B config YAML.")] = DEFAULT_WANDB_CONFIG,
     limit: Annotated[int | None, typer.Option(help="Optional max number of caption episodes to export.")] = None,
@@ -806,7 +806,7 @@ def main(
     typer.echo(f"exported {label_summary['label_episode_count']} label episodes")
     typer.echo(f"dataset: {dataset_hash} ({project_dataset.title})")
     typer.echo(f"source artifact: {lineage['source_dataset_artifact']}")
-    typer.echo(f"labels artifact: {lineage['labels_artifact']}")
+    typer.echo(f"label overlay artifact: {lineage['labels_artifact']}")
     typer.echo(f"local files: {output_dir}")
     typer.echo(f"run: {lineage['run_url']}")
 
