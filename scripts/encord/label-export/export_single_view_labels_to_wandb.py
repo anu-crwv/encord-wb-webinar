@@ -46,6 +46,7 @@ TROSSEN_STATE_ACTION_SPLITS = [
 ]
 RELATIVE_STATS_KEYS = ["left_joint_pos", "right_joint_pos"]
 RELATIVE_STATS_ACTION_HORIZON = 24
+DEFAULT_TROSSEN_EMBODIMENT_TAG = "trossen_ai_mobile"
 TROSSEN_STATE_ACTION_NAMES = [
     "left_joint_0",
     "left_joint_1",
@@ -815,6 +816,24 @@ def validate_modality_json(info: dict[str, Any], modality: dict[str, Any]) -> No
                     )
 
 
+def build_embodiment_json(info: dict[str, Any]) -> dict[str, str]:
+    tag = str(info.get("robot_type") or info.get("embodiment_tag") or DEFAULT_TROSSEN_EMBODIMENT_TAG)
+    return {"robot_type": tag, "embodiment_tag": tag}
+
+
+def validate_embodiment_json(embodiment: dict[str, Any]) -> None:
+    robot_type = embodiment.get("robot_type")
+    embodiment_tag = embodiment.get("embodiment_tag")
+    if not robot_type:
+        raise ValueError("embodiment.json is missing robot_type")
+    if not embodiment_tag:
+        raise ValueError("embodiment.json is missing embodiment_tag")
+    if robot_type != embodiment_tag:
+        raise ValueError(
+            f"embodiment.json robot_type and embodiment_tag must match: {robot_type!r} != {embodiment_tag!r}"
+        )
+
+
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, default=str) + "\n")
@@ -964,7 +983,10 @@ def export_label_overlay(
         action_horizon=RELATIVE_STATS_ACTION_HORIZON,
     )
     validate_relative_stats_json(modality, relative_stats, RELATIVE_STATS_KEYS)
+    embodiment = build_embodiment_json(info)
+    validate_embodiment_json(embodiment)
     write_json(dataset_meta / "info.json", info)
+    write_json(dataset_meta / "embodiment.json", embodiment)
     write_json(dataset_meta / "modality.json", modality)
     write_json(dataset_meta / "stats.json", stats)
     write_json(dataset_meta / "relative_stats_dreamzero.json", relative_stats)
@@ -976,6 +998,7 @@ def export_label_overlay(
         "label_episode_count": len(episode_rows),
         "label_task_count": len(task_rows),
         "label_frame_count": total_frames,
+        "embodiment_tag": embodiment["embodiment_tag"],
         "stats_columns": stats_cols,
         "relative_stats_keys": RELATIVE_STATS_KEYS,
         "relative_stats_action_horizon": RELATIVE_STATS_ACTION_HORIZON,
