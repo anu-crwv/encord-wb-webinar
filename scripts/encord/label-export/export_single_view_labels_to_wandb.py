@@ -4,6 +4,7 @@
 #     "boto3",
 #     "botocore",
 #     "encord @ git+ssh://git@github.com/encord-team/encord-client-python-private.git@b1edece2",
+#     "numpy",
 #     "pyarrow",
 #     "pyyaml",
 #     "typer",
@@ -530,6 +531,76 @@ def infer_features_from_table(table: Any) -> dict[str, Any]:
     return features
 
 
+def stats_columns(info: dict[str, Any], available_columns: set[str]) -> list[str]:
+    columns = []
+    for key, feature in (info.get("features") or {}).items():
+        dtype = str((feature or {}).get("dtype") or "")
+        if key in available_columns and "float" in dtype:
+            columns.append(key)
+    return columns
+
+
+def table_column_as_numpy(table: Any, column: str) -> Any:
+    import numpy as np
+
+    values = table[column].to_pylist()
+    if not values:
+        return None
+    data = np.asarray(values, dtype=np.float64)
+    if data.ndim == 1:
+        data = data.reshape(-1, 1)
+    return data
+
+
+def compute_stats(parquet_paths: list[Path], columns: list[str]) -> dict[str, Any]:
+    import numpy as np
+    import pyarrow.parquet as pq
+
+    if not columns:
+        raise ValueError("Cannot build stats.json: no floating-point columns found in exported parquet files")
+
+    all_data: dict[str, list[Any]] = {column: [] for column in columns}
+    for parquet_path in parquet_paths:
+        table = pq.read_table(parquet_path, columns=columns)
+        for column in columns:
+            if column not in table.column_names:
+                continue
+            data = table_column_as_numpy(table, column)
+            if data is not None:
+                all_data[column].append(data)
+
+    stats = {}
+    for column, arrays in all_data.items():
+        if not arrays:
+            raise ValueError(f"Cannot build stats.json: no data found for column {column}")
+        data = np.concatenate(arrays, axis=0)
+        stats[column] = {
+            "mean": np.mean(data, axis=0).tolist(),
+            "std": np.std(data, axis=0).tolist(),
+            "min": np.min(data, axis=0).tolist(),
+            "max": np.max(data, axis=0).tolist(),
+            "q01": np.quantile(data, 0.01, axis=0).tolist(),
+            "q99": np.quantile(data, 0.99, axis=0).tolist(),
+        }
+    return stats
+
+
+def validate_stats_json(info: dict[str, Any], stats: dict[str, Any]) -> None:
+    required_stats = {"mean", "std", "min", "max", "q01", "q99"}
+    features = info.get("features") or {}
+    for key, values in stats.items():
+        missing = required_stats - set(values)
+        if missing:
+            raise ValueError(f"stats.json {key} is missing stats: {sorted(missing)}")
+        expected_dim = int((features.get(key) or {}).get("shape", [1])[0])
+        for stat_name in required_stats:
+            actual_dim = len(values[stat_name])
+            if actual_dim != expected_dim:
+                raise ValueError(
+                    f"stats.json {key}.{stat_name} has length {actual_dim}; expected {expected_dim}"
+                )
+
+
 def merge_features(source_features: dict[str, Any], inferred_features: dict[str, Any]) -> dict[str, Any]:
     features = dict(source_features)
     for name, inferred in inferred_features.items():
@@ -718,6 +789,7 @@ def export_label_overlay(
     task_rows: list[dict[str, Any]] = []
     episode_rows: list[dict[str, Any]] = []
     manifest_rows: list[dict[str, Any]] = []
+    parquet_paths: list[Path] = []
     first_table = None
     first_source_info = None
     total_frames = 0
@@ -749,6 +821,7 @@ def export_label_overlay(
             / f"episode_{episode_index:06d}.parquet"
         )
         write_parquet(output_path, table)
+        parquet_paths.append(output_path)
         length = table.num_rows
         total_frames += length
 
@@ -790,8 +863,12 @@ def export_label_overlay(
     )
     modality = build_modality_json(info)
     validate_modality_json(info, modality)
+    stats_cols = stats_columns(info, set(first_table.column_names))
+    stats = compute_stats(parquet_paths, stats_cols)
+    validate_stats_json(info, stats)
     write_json(dataset_meta / "info.json", info)
     write_json(dataset_meta / "modality.json", modality)
+    write_json(dataset_meta / "stats.json", stats)
 
     summary = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -800,6 +877,7 @@ def export_label_overlay(
         "label_episode_count": len(episode_rows),
         "label_task_count": len(task_rows),
         "label_frame_count": total_frames,
+        "stats_columns": stats_cols,
         "skipped_label_count": len(skipped),
         "episodes": sorted(manifest_rows, key=lambda item: item["episode_index"]),
         "skipped_labels": skipped,
