@@ -38,6 +38,29 @@ LANG_KEYS = [
     "annotation.language.language_instruction_3",
 ]
 REQUIRED_PARQUET_COLUMNS = ["action", "observation.state", "timestamp", "frame_index"]
+TROSSEN_STATE_ACTION_SPLITS = [
+    ("left_joint_pos", 0, 7),
+    ("right_joint_pos", 7, 14),
+    ("base_velocity", 14, 16),
+]
+TROSSEN_STATE_ACTION_NAMES = [
+    "left_joint_0",
+    "left_joint_1",
+    "left_joint_2",
+    "left_joint_3",
+    "left_joint_4",
+    "left_joint_5",
+    "left_joint_6",
+    "right_joint_0",
+    "right_joint_1",
+    "right_joint_2",
+    "right_joint_3",
+    "right_joint_4",
+    "right_joint_5",
+    "right_joint_6",
+    "linear_vel",
+    "angular_vel",
+]
 EPISODE_DIR_RE = re.compile(r"^episode_\d+(?:_[A-Za-z0-9]+)?$")
 EPISODE_BASE_RE = re.compile(r"^(episode_\d+)(?:_[A-Za-z0-9]+)?$")
 
@@ -341,22 +364,73 @@ def preview_rows(labels: list[dict[str, Any]], metadata_by_hash: dict[str, dict[
     return rows
 
 
+def qualified_artifact_ref(wandb_config: dict[str, Any], artifact_ref: str) -> str:
+    entity = required(wandb_config, "entity", "W&B config")
+    project = required(wandb_config, "project", "W&B config")
+    if "/" not in artifact_ref.split(":", 1)[0]:
+        return f"{entity}/{project}/{artifact_ref}"
+    return artifact_ref
+
+
+def artifact_aliases(artifact: Any) -> list[str]:
+    aliases = getattr(artifact, "aliases", None) or []
+    return [str(alias) for alias in aliases]
+
+
+def artifact_attr(artifact: Any, name: str) -> Any:
+    value = getattr(artifact, name, None)
+    return value() if callable(value) else value
+
+
+def artifact_version(artifact: Any) -> str:
+    version = artifact_attr(artifact, "version")
+    if version not in (None, ""):
+        return str(version)
+
+    name = str(artifact_attr(artifact, "name") or "")
+    if ":" in name:
+        return name.rsplit(":", 1)[1]
+
+    raise ValueError("Could not resolve source dataset artifact to an immutable W&B version.")
+
+
+def source_artifact_fields(source_artifact: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_dataset_artifact": source_artifact["resolved_ref"],
+        "source_dataset_artifact_requested": source_artifact["requested_ref"],
+        "source_dataset_artifact_version": source_artifact["version"],
+        "source_dataset_artifact_digest": source_artifact.get("digest"),
+        "source_dataset_artifact_url": source_artifact.get("url"),
+        "source_dataset_artifact_aliases": source_artifact.get("aliases", []),
+    }
+
+
 def load_source_artifact_metadata(
     *,
     wandb_config: dict[str, Any],
     source_artifact_ref: str,
     output_dir: Path,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], dict[str, Any]]:
     import wandb
 
-    entity = required(wandb_config, "entity", "W&B config")
-    project = required(wandb_config, "project", "W&B config")
-    artifact_ref = source_artifact_ref
-    if "/" not in artifact_ref.split(":", 1)[0]:
-        artifact_ref = f"{entity}/{project}/{artifact_ref}"
+    artifact_ref = qualified_artifact_ref(wandb_config, source_artifact_ref)
 
     typer.echo(f"Loading source dataset artifact metadata from {artifact_ref}...")
     artifact = wandb.Api().artifact(artifact_ref)
+    version = artifact_version(artifact)
+    resolved_ref = f"{artifact_ref.split(':', 1)[0]}:{version}"
+    source_artifact = {
+        "requested_ref": source_artifact_ref,
+        "qualified_requested_ref": artifact_ref,
+        "resolved_ref": resolved_ref,
+        "version": version,
+        "digest": artifact_attr(artifact, "digest"),
+        "url": artifact_attr(artifact, "url"),
+        "aliases": artifact_aliases(artifact),
+    }
+    if resolved_ref != artifact_ref:
+        typer.echo(f"Resolved source dataset artifact to {resolved_ref}.")
+
     artifact_dir = output_dir / "source_artifact_metadata"
     manifest_file = Path(
         artifact.get_entry("dataset/meta/source_dataset_manifest.json").download(root=str(artifact_dir))
@@ -364,7 +438,7 @@ def load_source_artifact_metadata(
     items_file = Path(
         artifact.get_entry("dataset/meta/source_dataset_items.json").download(root=str(artifact_dir))
     )
-    return json.loads(manifest_file.read_text()), json.loads(items_file.read_text())
+    return json.loads(manifest_file.read_text()), json.loads(items_file.read_text()), source_artifact
 
 
 def source_episode_order(source_items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -456,6 +530,18 @@ def infer_features_from_table(table: Any) -> dict[str, Any]:
     return features
 
 
+def merge_features(source_features: dict[str, Any], inferred_features: dict[str, Any]) -> dict[str, Any]:
+    features = dict(source_features)
+    for name, inferred in inferred_features.items():
+        merged = dict(features.get(name) or {})
+        merged.update(inferred)
+        source_names = (features.get(name) or {}).get("names")
+        if source_names is not None and merged.get("shape") == (features.get(name) or {}).get("shape"):
+            merged["names"] = source_names
+        features[name] = merged
+    return features
+
+
 def build_info(
     *,
     source_info: dict[str, Any] | None,
@@ -466,14 +552,18 @@ def build_info(
     total_tasks: int,
 ) -> dict[str, Any]:
     info = dict(source_info or {})
-    features = dict((source_info or {}).get("features") or {})
-    features.update(infer_features_from_table(first_table))
+    source_features = dict((source_info or {}).get("features") or {})
+    features = merge_features(source_features, infer_features_from_table(first_table))
     for key in LANG_KEYS:
         features[key] = {"dtype": "int64", "shape": [1], "names": None}
+    video_feature_count = sum(
+        1 for feature in features.values() if isinstance(feature, dict) and feature.get("dtype") == "video"
+    )
     info.update({
         "total_episodes": total_episodes,
         "total_frames": total_frames,
         "total_tasks": total_tasks,
+        "total_videos": video_feature_count,
         "total_chunks": ((max_episode_index + 1) // CHUNK_SIZE) + (1 if (max_episode_index + 1) % CHUNK_SIZE else 0),
         "chunks_size": CHUNK_SIZE,
         "splits": {"train": f"0:{total_episodes}"},
@@ -485,6 +575,82 @@ def build_info(
         "features": features,
     })
     return info
+
+
+def vector_dim(info: dict[str, Any], key: str) -> int:
+    feature = (info.get("features") or {}).get(key)
+    if not feature:
+        raise ValueError(f"Cannot build modality.json: {key} is missing from info.json features")
+    shape = feature.get("shape") or []
+    if not shape:
+        raise ValueError(f"Cannot build modality.json: {key} has no shape in info.json")
+    return int(shape[0])
+
+
+def validate_trossen_state_action_names(info: dict[str, Any], key: str) -> None:
+    feature = (info.get("features") or {}).get(key) or {}
+    names = feature.get("names")
+    if names != TROSSEN_STATE_ACTION_NAMES:
+        raise ValueError(
+            f"Cannot build modality.json: {key} names do not match expected Trossen layout. "
+            f"Expected {TROSSEN_STATE_ACTION_NAMES}, got {names}"
+        )
+
+
+def state_action_modality_entry(info: dict[str, Any], original_key: str, start: int, end: int) -> dict[str, Any]:
+    feature = info["features"][original_key]
+    return {
+        "original_key": original_key,
+        "start": start,
+        "end": end,
+        "rotation_type": None,
+        "absolute": True,
+        "dtype": feature.get("dtype", "float32"),
+        "range": None,
+    }
+
+
+def build_modality_json(info: dict[str, Any]) -> dict[str, Any]:
+    state_dim = vector_dim(info, "observation.state")
+    action_dim = vector_dim(info, "action")
+    required_dim = max(end for _, _, end in TROSSEN_STATE_ACTION_SPLITS)
+    if state_dim < required_dim:
+        raise ValueError(f"observation.state has dim {state_dim}; expected at least {required_dim}")
+    if action_dim < required_dim:
+        raise ValueError(f"action has dim {action_dim}; expected at least {required_dim}")
+    validate_trossen_state_action_names(info, "observation.state")
+    validate_trossen_state_action_names(info, "action")
+
+    features = info.get("features") or {}
+    modality: dict[str, Any] = {"state": {}, "action": {}, "video": {}, "annotation": {}}
+    for name, start, end in TROSSEN_STATE_ACTION_SPLITS:
+        modality["state"][name] = state_action_modality_entry(info, "observation.state", start, end)
+        modality["action"][name] = state_action_modality_entry(info, "action", start, end)
+
+    for key, feature in sorted(features.items()):
+        if feature.get("dtype") == "video" and key.startswith("observation.images."):
+            modality["video"][key.replace("observation.images.", "")] = {"original_key": key}
+        elif key.startswith("annotation."):
+            modality["annotation"][key.replace("annotation.", "")] = {"original_key": key}
+
+    return modality
+
+
+def validate_modality_json(info: dict[str, Any], modality: dict[str, Any]) -> None:
+    features = info.get("features") or {}
+    for section in ["state", "action", "video", "annotation"]:
+        for key, meta in (modality.get(section) or {}).items():
+            original_key = meta.get("original_key")
+            if original_key not in features:
+                raise ValueError(f"modality.json {section}.{key} references missing feature {original_key}")
+            if section in {"state", "action"}:
+                dim = vector_dim(info, original_key)
+                start = int(meta["start"])
+                end = int(meta["end"])
+                if start < 0 or end <= start or end > dim:
+                    raise ValueError(
+                        f"modality.json {section}.{key} range [{start}, {end}) does not fit {original_key} dim {dim}"
+                    )
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -508,7 +674,7 @@ def export_label_overlay(
     *,
     rows: list[dict[str, Any]],
     output_dir: Path,
-    source_artifact_ref: str,
+    source_artifact: dict[str, Any],
     source_items: list[dict[str, Any]],
     source_manifest: dict[str, Any] | None,
     limit: int | None,
@@ -614,18 +780,22 @@ def export_label_overlay(
     dataset_meta = output_dir / "dataset" / "meta"
     write_jsonl(dataset_meta / "tasks.jsonl", sorted(task_rows, key=lambda item: item["task_index"]))
     write_jsonl(dataset_meta / "episodes.jsonl", sorted(episode_rows, key=lambda item: item["episode_index"]))
-    write_json(dataset_meta / "info.json", build_info(
+    info = build_info(
         source_info=first_source_info,
         first_table=first_table,
         total_episodes=len(episode_rows),
         max_episode_index=max(row["episode_index"] for row in episode_rows),
         total_frames=total_frames,
         total_tasks=len(task_rows),
-    ))
+    )
+    modality = build_modality_json(info)
+    validate_modality_json(info, modality)
+    write_json(dataset_meta / "info.json", info)
+    write_json(dataset_meta / "modality.json", modality)
 
     summary = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
-        "source_dataset_artifact": source_artifact_ref,
+        **source_artifact_fields(source_artifact),
         "source_dataset_manifest": source_manifest,
         "label_episode_count": len(episode_rows),
         "label_task_count": len(task_rows),
@@ -642,9 +812,9 @@ def log_to_wandb(
     *,
     wandb_config: dict[str, Any],
     metadata: dict[str, Any],
-    source_artifact_ref: str,
+    source_artifact: dict[str, Any],
     output_dir: Path,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     import wandb
 
     entity = required(wandb_config, "entity", "W&B config")
@@ -664,8 +834,8 @@ def log_to_wandb(
 
     with wandb.init(entity=entity, project=project, job_type="encord-label-export", name=run_name) as run:
         typer.echo(f"Logging to W&B run {run.url}...")
-        typer.echo(f"Using source dataset artifact {source_artifact_ref}.")
-        run.use_artifact(source_artifact_ref)
+        typer.echo(f"Using source dataset artifact {source_artifact['resolved_ref']}.")
+        run.use_artifact(source_artifact["resolved_ref"])
 
         typer.echo(f"Logging label overlay artifact {label_name}...")
         label_artifact = wandb.Artifact(
@@ -674,7 +844,7 @@ def log_to_wandb(
             metadata={
                 "encord_project_hash": manifest.get("encord_project_hash"),
                 "encord_dataset_hash": manifest.get("encord_dataset_hash"),
-                "source_dataset_artifact": source_artifact_ref,
+                **source_artifact_fields(source_artifact),
                 "label_version_note": metadata.get("label_version_note"),
                 "captioning_method": metadata.get("captioning_method"),
                 "qc_status": metadata.get("qc_status"),
@@ -688,7 +858,8 @@ def log_to_wandb(
         label_artifact.add_file(str(labels_path), name="encord_labels.json")
         label_artifact.add_file(str(preview_path), name="label_preview_rows.json")
         label_artifact.add_file(str(manifest_path), name="label_export_manifest.json")
-        logged_labels = run.log_artifact(label_artifact, aliases=["latest", "single-view"])
+        aliases = list(dict.fromkeys(["latest", "single-view", source_artifact["version"]]))
+        logged_labels = run.log_artifact(label_artifact, aliases=aliases)
         logged_labels.wait()
         labels_ref = f"{label_name}:{logged_labels.version}"
         typer.echo(f"Logged label overlay artifact {labels_ref}.")
@@ -720,7 +891,7 @@ def log_to_wandb(
         run.log({table_name: table})
         typer.echo("Logged preview table.")
 
-        return {"source_dataset_artifact": source_artifact_ref, "labels_artifact": labels_ref, "run_url": run.url}
+        return {**source_artifact_fields(source_artifact), "labels_artifact": labels_ref, "run_url": run.url}
 
 
 def main(
@@ -739,7 +910,7 @@ def main(
     project_hash = str(required(metadata, "encord_project_hash", "metadata YAML"))
 
     output_dir = make_output_dir()
-    source_manifest, source_items = load_source_artifact_metadata(
+    source_manifest, source_items, source_artifact = load_source_artifact_metadata(
         wandb_config=wandb_settings,
         source_artifact_ref=source_artifact_ref,
         output_dir=output_dir,
@@ -764,13 +935,15 @@ def main(
         "source_item_count": len(dataset_items),
         "label_row_count": len(labels),
         **metadata_notes,
-        "source_artifact_ref": source_artifact_ref,
+        "source_artifact_ref": source_artifact["resolved_ref"],
+        "source_artifact_ref_requested": source_artifact["requested_ref"],
+        **source_artifact_fields(source_artifact),
     }
 
     label_summary = export_label_overlay(
         rows=rows,
         output_dir=output_dir,
-        source_artifact_ref=source_artifact_ref,
+        source_artifact=source_artifact,
         source_items=source_items,
         source_manifest=source_manifest,
         limit=limit,
@@ -780,7 +953,7 @@ def main(
         "encord_project_title": project.title,
         "encord_dataset_hash": dataset_hash,
         "encord_dataset_title": project_dataset.title,
-        "source_dataset_artifact": source_artifact_ref,
+        **source_artifact_fields(source_artifact),
         "label_version_note": metadata_notes.get("label_version_note"),
         "captioning_method": metadata_notes.get("captioning_method"),
         "qc_status": metadata_notes.get("qc_status"),
@@ -798,7 +971,7 @@ def main(
     lineage = log_to_wandb(
         wandb_config=wandb_settings,
         metadata=metadata_notes,
-        source_artifact_ref=source_artifact_ref,
+        source_artifact=source_artifact,
         output_dir=output_dir,
     )
     write_json(output_dir / "wandb_lineage.json", lineage)
