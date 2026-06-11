@@ -78,6 +78,49 @@ def item_metadata(item: Any) -> dict[str, Any]:
     return getattr(item, "client_metadata", None) or {}
 
 
+def metadata_value(metadata: Any, key: str) -> Any:
+    if metadata is None:
+        return None
+    if isinstance(metadata, dict):
+        return metadata.get(key)
+    return getattr(metadata, key, None)
+
+
+def coerce_fps(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        fps = float(value)
+    except (TypeError, ValueError):
+        return None
+    if fps <= 0:
+        return None
+    return fps
+
+
+def item_fps(item: Any) -> float | None:
+    client_meta = item_metadata(item)
+    for key in ("fps", "collection_fps"):
+        fps = coerce_fps(client_meta.get(key))
+        if fps is not None:
+            return fps
+    return coerce_fps(metadata_value(getattr(item, "metadata", None), "fps"))
+
+
+def shared_fps(fps_values: list[float]) -> float | None:
+    if not fps_values:
+        typer.echo("Warning: no FPS found in video item metadata; writing fps=null.", err=True)
+        return None
+
+    distinct: dict[float, float] = {}
+    for fps in fps_values:
+        distinct.setdefault(round(fps, 6), fps)
+    if len(distinct) > 1:
+        values = ", ".join(str(value) for value in sorted(distinct.values()))
+        raise ValueError(f"Exported videos have multiple FPS values: {values}")
+    return next(iter(distinct.values()))
+
+
 def source_uri(item: Any) -> str:
     metadata = item_metadata(item)
     uri = metadata.get("source_uri") or metadata.get("s3_uri") or metadata.get("source_s3_uri")
@@ -185,6 +228,7 @@ def export_dataset(
 
     episodes = []
     source_items = []
+    fps_values = []
     video_keys = [f"observation.images.{CAMERA_TO_DROID_KEY[camera]}" for camera in CAMERA_ORDER]
 
     for episode_index, row in enumerate(data_rows):
@@ -201,6 +245,9 @@ def export_dataset(
         for camera_name in CAMERA_ORDER:
             item = videos[camera_name]
             uri = source_uri(item)
+            fps = item_fps(item)
+            if fps is not None:
+                fps_values.append(fps)
             relative_path = lerobot_video_path(episode_index, camera_name)
             local_path = output_dir / relative_path
             typer.echo(f"  downloading {camera_name}: {uri}")
@@ -214,6 +261,7 @@ def export_dataset(
                 "video_key": str(Path(relative_path).parent.relative_to(Path("dataset") / "videos" / f"chunk-{episode_index // CHUNK_SIZE:03d}")),
                 "artifact_path": str(relative_path),
                 "source_uri": uri,
+                "fps": fps,
                 "client_metadata": item_metadata(item),
             })
 
@@ -228,6 +276,7 @@ def export_dataset(
         })
 
     meta_dir = output_dir / "dataset" / "meta"
+    dataset_fps = shared_fps(fps_values)
     write_jsonl(meta_dir / "episodes.jsonl", episodes)
     write_json(meta_dir / "source_dataset_items.json", source_items)
     write_json(meta_dir / "source_dataset_manifest.json", {
@@ -248,12 +297,17 @@ def export_dataset(
         "total_videos": len(video_keys),
         "total_chunks": (len(episodes) // CHUNK_SIZE) + (1 if len(episodes) % CHUNK_SIZE else 0),
         "chunks_size": CHUNK_SIZE,
-        "fps": None,
+        "fps": dataset_fps,
         "splits": {"train": "0:100"},
         "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
         "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
         "features": {
-            video_key: {"dtype": "video", "shape": [None, None, 3], "names": ["height", "width", "channel"]}
+            video_key: {
+                "dtype": "video",
+                "shape": [None, None, 3],
+                "names": ["height", "width", "channel"],
+                "video_info": {"video.fps": dataset_fps},
+            }
             for video_key in video_keys
         },
     })
