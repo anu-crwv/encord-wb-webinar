@@ -1,0 +1,54 @@
+# Merge encord-labels (parquet) + encord-source-data (videos) into one LeRobot dataset for the
+# `trossen` embodiment, run the GEAR converter (modality/stats/embodiment), and patch the language
+# modality. Output: /data/wam/datasets/encord_trossen on the data PVC. Runs on a CPU node.
+#
+# Prereq: repo staged on the data PVC at /data/src/dreamzero-wam (the build script shells out to
+# scripts/data/convert_lerobot_to_gear.py); wandb-api-key secret present.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wam-encord-dataset
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-data"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-data"}
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: nvidia.com/gpu.product, operator: DoesNotExist}   # CPU-only node
+                  - {key: kubernetes.io/arch, operator: In, values: [amd64]}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: build
+          image: python:3.12-slim
+          command: ["/bin/bash", "-exo", "pipefail", "-c"]
+          args:
+            - |
+              export HOME=/data/.home-amd64 PIP_CACHE_DIR=/data/.home-amd64/.pip TMPDIR=/data/.home-amd64/.tmp
+              export HF_HOME=/data/.hf WANDB_DIR=/data/.home-amd64/.wandb
+              export WAM_REPO_ROOT=/data/src/dreamzero-wam
+              mkdir -p $HOME $PIP_CACHE_DIR $TMPDIR $HF_HOME $WANDB_DIR
+              python -m pip install --no-cache-dir --quiet "wandb>=0.18.0" huggingface_hub pandas pyarrow numpy tqdm
+              cd $WAM_REPO_ROOT
+              python wam/artifacts/build_encord_dataset.py --out /data/wam/datasets/encord_trossen
+          envFrom: [{secretRef: {name: wandb-api-key}}]
+          env:
+            - {name: WANDB_ENTITY,  value: encord-wb-physical-ai}
+            - {name: WANDB_PROJECT, value: wam-finetune-webinar}
+            - {name: WAM_DATA_ROOT, value: /data/wam}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+          resources:
+            requests: {cpu: "4", memory: 16Gi}
+            limits:   {cpu: "8", memory: 32Gi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: dreamzero-data}}

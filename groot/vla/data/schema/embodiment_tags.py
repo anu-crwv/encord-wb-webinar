@@ -155,6 +155,9 @@ class EmbodimentTag(Enum):
 
     YAM = "yam"
 
+    TROSSEN = "trossen"
+    """Trossen AI mobile bimanual robot (Encord export); 16-dim state/action, 3 cameras."""
+
     DREAM = "dream"
     """
     The datasets with DREAM actions.

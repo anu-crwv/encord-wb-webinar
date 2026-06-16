@@ -69,6 +69,13 @@ USE_AGIBOT_INIT = os.environ.get("USE_AGIBOT_INIT", "0") == "1"
 REPO_ROOT = os.environ.get("WAM_REPO_ROOT", str(Path(__file__).resolve().parents[1]))
 DATA_CACHE = os.path.join(os.environ.get("WAM_DATA_CACHE", "/data/wam/artifact_cache"), "droid-pickplace")
 CKPT_NAME = os.environ.get("WAM_CKPT_ARTIFACT_NAME", "dreamzero-droid-pickplace-lora")
+# Embodiment / data-config knobs (defaults = DROID). For a new embodiment, set the Hydra data config
+# + its data-root key, e.g. DATA_CONFIG=dreamzero/trossen_relative DATA_ROOT_KEY=trossen_data_root.
+DATA_CONFIG = os.environ.get("DATA_CONFIG", "dreamzero/droid_relative")
+DATA_ROOT_KEY = os.environ.get("DATA_ROOT_KEY", "droid_data_root")
+# If set, train from this local PVC dataset dir and SKIP the dataset Registry artifact (used for an
+# embodiment whose dataset isn't registered yet — base models still recorded as lineage inputs).
+DATASET_LOCAL_DIR = os.environ.get("WAM_DATASET_LOCAL_DIR", "")
 # Shared run id + output dir are DETERMINISTIC from WANDB_RUN_ID (same env on every node).
 RUN_ID = os.environ.get("WANDB_RUN_ID") or wandb.util.generate_id()
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", f"/checkpoints/wam/runs/droid_pickplace_{ARCH}_{RUN_ID}")
@@ -83,7 +90,7 @@ def model_dir(name: str) -> str:
 def build_overrides(wan_dir, umt5_dir, agibot_dir, data_dir) -> list[str]:
     ov = [
         "report_to=wandb", f"wandb_project={PROJECT}",
-        "data=dreamzero/droid_relative", f"droid_data_root={data_dir}",
+        f"data={DATA_CONFIG}", f"{DATA_ROOT_KEY}={data_dir}",
         f"train_architecture={ARCH}",
         "num_frames=33", "action_horizon=24", "num_views=3",
         "model=dreamzero/vla",
@@ -135,23 +142,27 @@ def primary_prepare():
         settings=wandb.Settings(mode="shared", x_primary=True, x_label="launcher-node0"),
         config=dict(arch=ARCH, max_steps=int(MAX_STEPS), nnodes=NNODES, num_gpus=int(NUM_GPUS),
                     per_device_batch_size=int(PER_DEV_BS), learning_rate=LEARNING_RATE,
-                    deepspeed=DEEPSPEED, use_agibot_init=USE_AGIBOT_INIT,
-                    artifacts=dict(**ART, dataset=DATA_ART)),
+                    deepspeed=DEEPSPEED, use_agibot_init=USE_AGIBOT_INIT, data_config=DATA_CONFIG,
+                    artifacts=dict(**ART, dataset=(DATASET_LOCAL_DIR or DATA_ART))),
     )
-    print("[train] rank0 recording artifact lineage (use_artifact x4)...")
+    print("[train] rank0 recording artifact lineage (base models)...")
     for name, art in ART.items():
         run.use_artifact(art)          # input-lineage edge; weights already on the PVC
-    # dataset is a managed artifact -> download to a CLEAN dir (digest-based download won't delete
-    # files absent from the new manifest, so wipe first to avoid cross-version contamination).
-    shutil.rmtree(DATA_CACHE, ignore_errors=True)
-    data_art = run.use_artifact(DATA_ART)
-    data_art.download(root=DATA_CACHE)
+    if DATASET_LOCAL_DIR:
+        # Train from a local (not-yet-registered) dataset dir on the PVC; no dataset artifact edge.
+        data_dir = DATASET_LOCAL_DIR
+        print(f"[train] using local dataset dir {data_dir} (no dataset artifact)")
+    else:
+        # dataset is a managed artifact -> download to a CLEAN dir (digest-based download won't delete
+        # files absent from the new manifest, so wipe first to avoid cross-version contamination).
+        shutil.rmtree(DATA_CACHE, ignore_errors=True)
+        run.use_artifact(DATA_ART).download(root=DATA_CACHE)
+        data_dir = DATA_CACHE
     # Release the run id so the trainer subprocess can RESUME it for metric logging (HF Trainer's
-    # WandbCallback can't be forced into shared-mode attach via env, so we hand the run off serially
-    # instead of holding it open). The run is created in shared mode; the trainer resumes it.
+    # WandbCallback can't be forced into shared-mode attach via env, so we hand the run off serially).
     run.finish()
-    Path(READY_FLAG).write_text(json.dumps({"run_id": RUN_ID, "data_dir": DATA_CACHE}))
-    print(f"[train] rank0 ready; dataset staged at {DATA_CACHE}; run {RUN_ID} handed off")
+    Path(READY_FLAG).write_text(json.dumps({"run_id": RUN_ID, "data_dir": data_dir}))
+    print(f"[train] rank0 ready; dataset at {data_dir}; run {RUN_ID} handed off")
     return None
 
 
@@ -176,7 +187,7 @@ def main() -> None:
 
     wan_dir, umt5_dir, agibot_dir = (model_dir("wan2-1-i2v-14b-480p"),
                                      model_dir("umt5-xxl"), model_dir("dreamzero-agibot"))
-    data_dir = DATA_CACHE
+    data_dir = DATASET_LOCAL_DIR or DATA_CACHE
 
     # 2. Launch the upstream trainer across all nodes. The global-rank0 trainer process RESUMES the
     #    handed-off run (WANDB_RUN_ID + resume) so HF Trainer metrics land on rank0's run; other ranks
@@ -222,8 +233,9 @@ def main() -> None:
     log_checkpoint_artifact(
         run, name=CKPT_NAME, ckpt_dir=upload_dir,
         metadata=dict(arch=ARCH, max_steps=int(MAX_STEPS), learning_rate=LEARNING_RATE, nnodes=NNODES,
+                      data_config=DATA_CONFIG,
                       base_wan=ART["wan2-1-i2v-14b-480p"], tokenizer=ART["umt5-xxl"],
-                      pretrained=ART["dreamzero-agibot"], dataset=DATA_ART,
+                      pretrained=ART["dreamzero-agibot"], dataset=(DATASET_LOCAL_DIR or DATA_ART),
                       source_run=RUN_ID, checkpoint=Path(upload_dir).name),
         registry="wandb-registry-model", aliases=["smoke", "latest"],
     )

@@ -62,7 +62,7 @@ VALID_EMBODIMENT_TAGS = [
     "real_panda_single_arm", "hot3d_hands_only",
     "gr1_unified", "robocasa_gr1_arms_waist_fourier_hands",
     "agibot", "lapa", "oxe_mutex", "oxe_roboset", "oxe_plex",
-    "dream", "yam", "xdof",
+    "dream", "yam", "xdof", "trossen",
     "gr1_unified_segmentation", "language_table_sim", "gr1_isaac",
     "sim_behavior_r1_pro", "mecka_hands", "real_r1_pro_sharpa",
 ]

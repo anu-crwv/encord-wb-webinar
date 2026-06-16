@@ -33,6 +33,7 @@ embodiment_tag_to_projector_index:
   oxe_plex: 30
   dream: 31
   yam: 32
+  trossen: 32   # Encord/Trossen bimanual 3-cam -> reuse YAM's projector index + collate branch
   xdof: 22
   gr1_unified_segmentation: 14
   language_table_sim: 7
