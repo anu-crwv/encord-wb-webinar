@@ -20,7 +20,7 @@ from uuid import UUID
 import typer
 
 
-METADATA_KEYS = ["task_name", "collection_date"]
+METADATA_KEYS = ["task_name", "collection_datetime"]
 ENCORD_SSH_KEY_ENV = "ENCORD_SSH_KEY_FILE"
 
 
