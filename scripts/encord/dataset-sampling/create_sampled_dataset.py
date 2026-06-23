@@ -44,8 +44,9 @@ def create_client(ssh_key_file: Path | None) -> Any:
     return EncordUserClient.create_with_ssh_private_key(key_path.read_text())
 
 
-def row_metadata(item: Any) -> dict[str, Any]:
-    return getattr(item, "client_metadata", None) or {}
+def row_metadata(row: Any) -> dict[str, Any]:
+    metadata = row.client_metadata
+    return dict(metadata) if metadata is not None else {}
 
 
 def metadata_values(metadata: dict[str, Any]) -> dict[str, str] | None:
@@ -54,21 +55,18 @@ def metadata_values(metadata: dict[str, Any]) -> dict[str, str] | None:
     return {key: str(metadata[key]) for key in METADATA_KEYS}
 
 
-def load_rows(client: Any, dataset: Any) -> tuple[list[SampleRow], int, int]:
+def load_rows(dataset: Any) -> tuple[list[SampleRow], int, int]:
     data_rows = list(dataset.data_rows)
-    backing_ids = [row.backing_item_uuid for row in data_rows if getattr(row, "backing_item_uuid", None)]
-    storage_items = {str(item.uuid): item for item in client.get_storage_items(backing_ids)} if backing_ids else {}
 
     rows = []
     excluded = 0
     for row in data_rows:
         backing_item_uuid = getattr(row, "backing_item_uuid", None)
-        item = storage_items.get(str(backing_item_uuid))
-        if item is None:
+        if backing_item_uuid is None:
             excluded += 1
             continue
 
-        values = metadata_values(row_metadata(item))
+        values = metadata_values(row_metadata(row))
         if values is None:
             excluded += 1
             continue
@@ -216,8 +214,11 @@ def main(
     rng = random.Random(seed)
     client = create_client(ssh_key_file)
     source_dataset = client.get_dataset(dataset_hash)
+    from encord.client import DatasetAccessSettings
 
-    rows, total_rows, excluded_rows = load_rows(client, source_dataset)
+    source_dataset.set_access_settings(DatasetAccessSettings(fetch_client_metadata=True))
+
+    rows, total_rows, excluded_rows = load_rows(source_dataset)
     typer.echo(f"Source dataset: {source_dataset.title} ({dataset_hash})")
     typer.echo(f"Data rows: {total_rows}")
     typer.echo(f"Eligible rows: {len(rows)}")
