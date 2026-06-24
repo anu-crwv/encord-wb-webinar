@@ -65,6 +65,7 @@ TROSSEN_STATE_ACTION_NAMES = [
     "linear_vel",
     "angular_vel",
 ]
+TROSSEN_VECTOR_DIM = len(TROSSEN_STATE_ACTION_NAMES)
 EPISODE_DIR_RE = re.compile(r"^episode_\d+(?:_[A-Za-z0-9]+)?$")
 EPISODE_BASE_RE = re.compile(r"^(episode_\d+)(?:_[A-Za-z0-9]+)?$")
 
@@ -494,12 +495,40 @@ def set_column(table: Any, name: str, array: Any) -> Any:
     return table.append_column(name, array)
 
 
+def normalize_vector_column(table: Any, column: str, expected_dim: int, episode_index: int) -> Any:
+    import pyarrow as pa
+
+    field = table.schema.field(column)
+    actual_dim = getattr(field.type, "list_size", None)
+    if actual_dim == expected_dim:
+        return table
+
+    normalized = []
+    for row_index, value in enumerate(table[column].to_pylist()):
+        if value is None:
+            raise ValueError(f"{column} has null vector at episode {episode_index}, row {row_index}")
+        vector = list(value)
+        if len(vector) < expected_dim:
+            raise ValueError(
+                f"{column} has dim {len(vector)} at episode {episode_index}, row {row_index}; "
+                f"expected at least {expected_dim}"
+            )
+        normalized.append(vector[:expected_dim])
+
+    value_type = getattr(field.type, "value_type", pa.float32())
+    typer.echo(f"Normalizing {column} dim {actual_dim or 'variable'} to {expected_dim} for episode {episode_index}.")
+    return set_column(table, column, pa.array(normalized, type=pa.list_(value_type, list_size=expected_dim)))
+
+
 def rewrite_label_table(table: Any, episode_index: int, global_start: int, task_id: int) -> Any:
     import pyarrow as pa
 
     missing = [column for column in REQUIRED_PARQUET_COLUMNS if column not in table.column_names]
     if missing:
         raise ValueError(f"Source parquet missing required columns: {missing}")
+
+    table = normalize_vector_column(table, "action", TROSSEN_VECTOR_DIM, episode_index)
+    table = normalize_vector_column(table, "observation.state", TROSSEN_VECTOR_DIM, episode_index)
 
     rows = table.num_rows
     table = set_column(table, "episode_index", pa.array([episode_index] * rows, type=pa.int64()))
@@ -568,7 +597,22 @@ def array_stats(data: Any) -> dict[str, Any]:
     }
 
 
-def compute_stats(parquet_paths: list[Path], columns: list[str]) -> dict[str, Any]:
+def feature_dim(info: dict[str, Any], column: str) -> int | None:
+    shape = ((info.get("features") or {}).get(column) or {}).get("shape") or []
+    if not shape:
+        return None
+    return int(shape[0])
+
+
+def align_stats_data(data: Any, column: str, expected_dim: int | None) -> Any:
+    if expected_dim is None or data.shape[1] == expected_dim:
+        return data
+    if data.shape[1] < expected_dim:
+        raise ValueError(f"Cannot build stats.json: {column} has dim {data.shape[1]}; expected {expected_dim}")
+    return data[:, :expected_dim]
+
+
+def compute_stats(parquet_paths: list[Path], columns: list[str], info: dict[str, Any]) -> dict[str, Any]:
     import numpy as np
     import pyarrow.parquet as pq
 
@@ -583,7 +627,7 @@ def compute_stats(parquet_paths: list[Path], columns: list[str]) -> dict[str, An
                 continue
             data = table_column_as_numpy(table, column)
             if data is not None:
-                all_data[column].append(data)
+                all_data[column].append(align_stats_data(data, column, feature_dim(info, column)))
 
     stats = {}
     for column, arrays in all_data.items():
@@ -974,7 +1018,7 @@ def export_label_overlay(
     modality = build_modality_json(info)
     validate_modality_json(info, modality)
     stats_cols = stats_columns(info, set(first_table.column_names))
-    stats = compute_stats(parquet_paths, stats_cols)
+    stats = compute_stats(parquet_paths, stats_cols, info)
     validate_stats_json(info, stats)
     relative_stats = compute_relative_stats(
         parquet_paths=parquet_paths,
