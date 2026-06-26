@@ -2,6 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "boto3",
+#     "botocore",
 #     "encord @ git+ssh://git@github.com/encord-team/encord-client-python-private.git@b1edece2",
 #     "numpy",
 #     "pyarrow",
@@ -77,9 +78,13 @@ def create_client() -> EncordUserClient:
     return EncordUserClient.create_with_ssh_private_key(key_path.read_text())
 
 
-def s3_client() -> Any:
+def s3_client(unsigned: bool) -> Any:
     import boto3
+    from botocore import UNSIGNED
+    from botocore.config import Config
 
+    if unsigned:
+        return boto3.client("s3", config=Config(signature_version=UNSIGNED))
     return boto3.client("s3")
 
 
@@ -485,6 +490,10 @@ def main(
         bool,
         typer.Option(help="Overwrite existing caption classifications if present."),
     ] = False,
+    unsigned_s3: Annotated[
+        bool,
+        typer.Option(help="Use unsigned S3 requests for public buckets."),
+    ] = False,
     dry_run: Annotated[
         bool,
         typer.Option(help="Preflight and generate captions without creating the project."),
@@ -501,7 +510,7 @@ def main(
     )
 
     plan = build_caption_plan(
-        client_s3=s3_client(),
+        client_s3=s3_client(unsigned_s3),
         data_rows=data_rows,
         metadata_by_hash=metadata_by_hash,
         source_parquet_cache_dir=source_parquet_cache_dir,
