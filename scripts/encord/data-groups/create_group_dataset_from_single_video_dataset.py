@@ -71,19 +71,11 @@ def episode_path_from_source(value: Any) -> str | None:
 def normalized_episode_path(episode_path: str) -> str:
     parts = [part for part in episode_path.rstrip("/").split("/") if part]
     if not parts:
-        return episode_path
+        return ""
     match = EPISODE_BASE_RE.match(parts[-1])
     if match:
         parts[-1] = match.group(1)
     return "/".join(parts) + "/"
-
-
-def episode_id_from_path(episode_path: str) -> str | None:
-    parts = [part for part in episode_path.rstrip("/").split("/") if part]
-    if not parts:
-        return None
-    match = EPISODE_BASE_RE.match(parts[-1])
-    return match.group(1) if match else None
 
 
 def episode_path_from_metadata(metadata: dict[str, Any], fallback_name: Any = None) -> str | None:
@@ -100,11 +92,8 @@ def episode_path_from_metadata(metadata: dict[str, Any], fallback_name: Any = No
 
 
 def episode_keys_from_path(episode_path: str) -> list[str]:
-    keys = [episode_path, normalized_episode_path(episode_path)]
-    episode_id = episode_id_from_path(episode_path)
-    if episode_id:
-        keys.append(episode_id)
-    return list(dict.fromkeys(keys))
+    key = normalized_episode_path(episode_path)
+    return [key] if key else []
 
 
 def episode_keys_from_metadata(metadata: dict[str, Any], fallback_name: Any = None) -> list[str]:
@@ -112,8 +101,6 @@ def episode_keys_from_metadata(metadata: dict[str, Any], fallback_name: Any = No
     episode_path = episode_path_from_metadata(metadata, fallback_name)
     if episode_path:
         keys.extend(episode_keys_from_path(episode_path))
-    if metadata.get("episode_id"):
-        keys.append(str(metadata["episode_id"]))
     return list(dict.fromkeys(keys))
 
 
@@ -202,6 +189,7 @@ def load_group_by_episode(folder: Any, client: Any, debug: bool = False, debug_l
 
     groups_by_episode = {}
     collisions: dict[str, list[str]] = defaultdict(list)
+    ambiguous_keys: set[str] = set()
     scanned = 0
     typer.echo(f"Scanning data-group folder {folder.uuid}...")
     for group_item in folder.list_items(page_size=1000, item_types=[StorageItemType.GROUP]):
@@ -215,16 +203,20 @@ def load_group_by_episode(folder: Any, client: Any, debug: bool = False, debug_l
         if item_debug:
             typer.echo(f"    resolved keys: {keys}")
         for key in keys:
+            if key in ambiguous_keys:
+                continue
             existing_group = groups_by_episode.get(key)
             if existing_group is not None and existing_group.uuid != group_item.uuid:
-                collisions[key].append(str(group_item.uuid))
+                collisions[key].extend([str(existing_group.uuid), str(group_item.uuid)])
                 groups_by_episode.pop(key, None)
+                ambiguous_keys.add(key)
                 continue
             groups_by_episode[key] = group_item
     typer.echo(f"Scanned {scanned} group items.")
-    typer.echo(f"Found {len(groups_by_episode)} data-group match keys.")
+    typer.echo(f"Found {len(groups_by_episode)} exact episode-path data-group match keys.")
     if collisions:
-        typer.echo(f"Skipped {sum(len(value) for value in collisions.values())} duplicate ambiguous group keys.")
+        skipped = sum(len(set(value)) for value in collisions.values())
+        typer.echo(f"Skipped {skipped} duplicate ambiguous group keys.")
     return groups_by_episode
 
 
