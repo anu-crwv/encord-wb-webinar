@@ -28,6 +28,7 @@ import yaml
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[2]
 DEFAULT_WANDB_CONFIG = SCRIPT_DIR.parent / "wandb_config.yaml"
+DEFAULT_EXPORT_CONFIG = SCRIPT_DIR / "dataset_export_config.yaml"
 EXPORT_ROOT = REPO_ROOT / "exports/encord-dataset-export"
 CHUNK_SIZE = 1000
 CAMERA_ORDER = ["cam_high", "cam_left_wrist", "cam_right_wrist"]
@@ -58,6 +59,19 @@ def required(config: dict[str, Any], key: str, label: str) -> Any:
     if value in (None, ""):
         raise typer.BadParameter(f"{label} is missing required key: {key}")
     return value
+
+
+def configured_aliases(config: dict[str, Any]) -> list[str]:
+    aliases = config.get("aliases") or ["latest"]
+    if isinstance(aliases, str):
+        return [aliases]
+    if not isinstance(aliases, list):
+        raise typer.BadParameter("Dataset export config aliases must be a list or string.")
+    return [str(alias) for alias in aliases]
+
+
+def configured_description(config: dict[str, Any], summary: dict[str, Any]) -> str:
+    return str(config.get("description") or f"Encord dataset export {summary['encord_dataset_hash']}")
 
 
 def create_client():
@@ -619,6 +633,7 @@ def log_to_wandb(
     output_dir: Path,
     summary: dict[str, Any],
     aliases: list[str],
+    description: str,
     base_artifact: dict[str, Any] | None,
 ) -> dict[str, str]:
     import wandb
@@ -637,7 +652,7 @@ def log_to_wandb(
                 artifact_name,
                 type="dataset",
                 metadata=summary,
-                description=f"Encord dataset export {summary['encord_dataset_hash']}",
+                description=description,
             )
             artifact.add_dir(str(output_dir / "dataset"), name="dataset")
             logged = run.log_artifact(artifact, aliases=aliases)
@@ -646,7 +661,7 @@ def log_to_wandb(
             saved = run.use_artifact(base_artifact["resolved_ref"])
             draft = saved.new_draft()
             draft.metadata.update(summary)
-            draft.description = f"Incremental Encord dataset export {summary['encord_dataset_hash']}"
+            draft.description = description
 
             for entry_name in META_ENTRY_PATHS:
                 draft.remove(entry_name)
@@ -666,6 +681,7 @@ def log_to_wandb(
 def main(
     dataset_hash: Annotated[UUID, typer.Option(help="Encord dataset hash to export.")],
     wandb_config: Annotated[Path, typer.Option(help="W&B config YAML.")] = DEFAULT_WANDB_CONFIG,
+    export_config: Annotated[Path, typer.Option(help="Dataset export config YAML.")] = DEFAULT_EXPORT_CONFIG,
     limit: Annotated[int | None, typer.Option(help="Optional max number of data groups to export.")] = None,
     alias: Annotated[list[str] | None, typer.Option("--alias", help="W&B artifact alias. Repeatable.")] = None,
     unsigned_s3: Annotated[bool, typer.Option(help="Use unsigned S3 requests for public buckets.")] = False,
@@ -675,6 +691,7 @@ def main(
     ] = None,
 ) -> None:
     wandb_settings = load_yaml(wandb_config, "W&B config")
+    export_settings = load_yaml(export_config, "Dataset export config")
     output_dir = make_output_dir()
     typer.echo(f"Writing local export to {output_dir}")
 
@@ -706,7 +723,8 @@ def main(
         wandb_config=wandb_settings,
         output_dir=output_dir,
         summary=summary,
-        aliases=alias or ["latest"],
+        aliases=alias or configured_aliases(export_settings),
+        description=configured_description(export_settings, summary),
         base_artifact=base_artifact,
     )
     write_json(output_dir / "wandb_lineage.json", lineage)
