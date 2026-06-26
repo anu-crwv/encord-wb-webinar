@@ -5,7 +5,7 @@
 #     "typer",
 # ]
 # ///
-"""Apply one Language Instruction caption to every video row from an Encord folder."""
+"""Create one Language Instruction caption for every video row from an Encord folder."""
 
 from __future__ import annotations
 
