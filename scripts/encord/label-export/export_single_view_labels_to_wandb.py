@@ -141,7 +141,7 @@ def normalized_episode_path(episode_path: str | None) -> str | None:
         return None
     parts = [part for part in episode_path.rstrip("/").split("/") if part]
     if not parts:
-        return episode_path
+        return None
     match = EPISODE_BASE_RE.match(parts[-1])
     if match:
         parts[-1] = match.group(1)
@@ -168,19 +168,8 @@ def episode_path_from_metadata(metadata: dict[str, Any], fallback_name: Any = No
     return episode_path_from_source(fallback_name)
 
 
-def episode_keys(episode_path: str | None, episode_id: Any = None) -> list[str]:
-    keys = []
-    if episode_path:
-        keys.append(episode_path)
-        normal = normalized_episode_path(episode_path)
-        if normal:
-            keys.append(normal)
-        path_id = episode_id_from_path(episode_path)
-        if path_id:
-            keys.append(path_id)
-    if episode_id not in (None, ""):
-        keys.append(str(episode_id))
-    return list(dict.fromkeys(keys))
+def episode_match_key(episode_path: str | None) -> str | None:
+    return normalized_episode_path(episode_path)
 
 
 def get_single_project_dataset(client: Any, project_hash: str):
@@ -446,9 +435,10 @@ def load_source_artifact_metadata(
     return json.loads(manifest_file.read_text()), json.loads(items_file.read_text()), source_artifact
 
 
-def source_episode_order(source_items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def source_episode_order(source_items: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], set[str]]:
     by_key: dict[str, dict[str, Any]] = {}
     by_episode_index: dict[int, dict[str, Any]] = {}
+    ambiguous_keys: set[str] = set()
     for item in source_items:
         client_meta = item.get("client_metadata") or {}
         episode_index = item.get("episode_index")
@@ -462,13 +452,22 @@ def source_episode_order(source_items: list[dict[str, Any]]) -> dict[str, dict[s
         })
         entry["source_video_items"].append(item)
         episode_path = episode_path_from_metadata(client_meta, item.get("artifact_path") or item.get("source_uri"))
-        for key in episode_keys(episode_path, client_meta.get("episode_id")):
-            by_key[key] = entry
-    return by_key
+        key = episode_match_key(episode_path)
+        if not key or key in ambiguous_keys:
+            continue
+        existing = by_key.get(key)
+        if existing is not None and int(existing["episode_index"]) != int(episode_index):
+            by_key.pop(key, None)
+            ambiguous_keys.add(key)
+            continue
+        by_key[key] = entry
+    if ambiguous_keys:
+        typer.echo(f"Skipped {len(ambiguous_keys)} ambiguous source artifact episode paths.")
+    return by_key, ambiguous_keys
 
 
-def row_match_keys(row: dict[str, Any]) -> list[str]:
-    return episode_keys(row.get("episode_path"), row.get("episode_id"))
+def row_match_key(row: dict[str, Any]) -> str | None:
+    return episode_match_key(row.get("episode_path"))
 
 
 def read_s3_json(client_s3: Any, uri: str) -> dict[str, Any] | None:
@@ -895,6 +894,23 @@ def make_output_dir() -> Path:
     return output_dir
 
 
+def skipped_label(row: dict[str, Any], reason: str, episode_path_key: str | None = None) -> dict[str, Any]:
+    skipped = {
+        "data_hash": row.get("data_hash"),
+        "data_title": row.get("data_title"),
+        "reason": reason,
+    }
+    if row.get("episode_path"):
+        skipped["episode_path"] = row.get("episode_path")
+    if episode_path_key:
+        skipped["episode_path_key"] = episode_path_key
+    return skipped
+
+
+def duplicate_label_signature(row: dict[str, Any]) -> tuple[str, str]:
+    return str(row.get("language_instruction") or ""), str(row.get("source_parquet_uri") or "")
+
+
 def export_label_overlay(
     *,
     rows: list[dict[str, Any]],
@@ -905,40 +921,70 @@ def export_label_overlay(
     limit: int | None,
 ) -> dict[str, Any]:
     client_s3 = s3_client(unsigned=False)
-    source_by_key = source_episode_order(source_items)
-    selected: list[tuple[int, dict[str, Any], dict[str, Any] | None]] = []
+    source_by_key, ambiguous_source_keys = source_episode_order(source_items)
+    selected_by_key: dict[str, tuple[int, dict[str, Any], dict[str, Any]]] = {}
+    selected_signatures: dict[str, tuple[str, str]] = {}
+    seen_parquets: dict[str, str] = {}
+    ambiguous_label_keys: set[str] = set()
     skipped: list[dict[str, Any]] = []
-    seen_parquets: set[str] = set()
-    fallback_index = 0
 
     for row in rows:
         caption = row.get("language_instruction")
         parquet_uri = row.get("source_parquet_uri")
         if not caption:
-            skipped.append({"data_hash": row.get("data_hash"), "reason": "missing language_instruction"})
+            skipped.append(skipped_label(row, "missing_language_instruction"))
             continue
         if not parquet_uri:
-            skipped.append({"data_hash": row.get("data_hash"), "reason": "missing source_parquet_uri"})
+            skipped.append(skipped_label(row, "missing_source_parquet_uri"))
             continue
-        if parquet_uri in seen_parquets:
-            skipped.append({"data_hash": row.get("data_hash"), "reason": "duplicate episode parquet"})
+        match_key = row_match_key(row)
+        if not match_key:
+            skipped.append(skipped_label(row, "missing_episode_path"))
             continue
-        seen_parquets.add(parquet_uri)
+        if match_key in ambiguous_source_keys:
+            skipped.append(skipped_label(row, "ambiguous_source_episode_path", match_key))
+            continue
+        if match_key in ambiguous_label_keys:
+            skipped.append(skipped_label(row, "ambiguous_duplicate_label", match_key))
+            continue
 
-        source_episode = next((source_by_key[key] for key in row_match_keys(row) if key in source_by_key), None)
-        if source_episode is not None:
-            episode_index = int(source_episode["episode_index"])
-        else:
-            episode_index = fallback_index
-            fallback_index += 1
-        selected.append((episode_index, row, source_episode))
-        if limit is not None and len(selected) >= limit:
-            break
+        source_episode = source_by_key.get(match_key)
+        if source_episode is None:
+            skipped.append(skipped_label(row, "missing_source_episode_match", match_key))
+            continue
 
+        signature = duplicate_label_signature(row)
+        existing = selected_by_key.get(match_key)
+        if existing is not None:
+            if selected_signatures.get(match_key) == signature:
+                skipped.append(skipped_label(row, "duplicate_episode_path_same_label", match_key))
+                continue
+            existing_row = existing[1]
+            existing_parquet = str(existing_row.get("source_parquet_uri") or "")
+            if existing_parquet:
+                seen_parquets.pop(existing_parquet, None)
+            selected_by_key.pop(match_key, None)
+            selected_signatures.pop(match_key, None)
+            ambiguous_label_keys.add(match_key)
+            skipped.append(skipped_label(existing_row, "ambiguous_duplicate_label", match_key))
+            skipped.append(skipped_label(row, "ambiguous_duplicate_label", match_key))
+            continue
+
+        parquet_key = str(parquet_uri)
+        if parquet_key in seen_parquets:
+            skipped.append(skipped_label(row, "duplicate_episode_parquet", match_key))
+            continue
+        seen_parquets[parquet_key] = match_key
+
+        episode_index = int(source_episode["episode_index"])
+        selected_by_key[match_key] = (episode_index, row, source_episode)
+        selected_signatures[match_key] = signature
+
+    selected = sorted(selected_by_key.values(), key=lambda item: item[0])
+    if limit is not None:
+        selected = selected[:limit]
     if not selected:
         raise typer.BadParameter("No caption label rows matched exportable episodes.")
-
-    selected.sort(key=lambda item: item[0])
     task_to_id: dict[str, int] = {}
     task_rows: list[dict[str, Any]] = []
     episode_rows: list[dict[str, Any]] = []
@@ -991,12 +1037,11 @@ def export_label_overlay(
             "episode_path": row.get("episode_path"),
             "source_parquet_uri": parquet_uri,
         }
-        if source_episode is not None:
-            episode_row.update({
-                "source_dataset_episode_index": source_episode.get("episode_index"),
-                "source_dataset_data_hash": source_episode.get("encord_data_hash"),
-                "source_dataset_data_group_uuid": source_episode.get("encord_data_group_uuid"),
-            })
+        episode_row.update({
+            "source_dataset_episode_index": source_episode.get("episode_index"),
+            "source_dataset_data_hash": source_episode.get("encord_data_hash"),
+            "source_dataset_data_group_uuid": source_episode.get("encord_data_group_uuid"),
+        })
         episode_rows.append(episode_row)
         manifest_rows.append({
             **episode_row,
@@ -1046,6 +1091,9 @@ def export_label_overlay(
         "stats_columns": stats_cols,
         "relative_stats_keys": RELATIVE_STATS_KEYS,
         "relative_stats_action_horizon": RELATIVE_STATS_ACTION_HORIZON,
+        "source_match_key_count": len(source_by_key),
+        "ambiguous_source_episode_path_count": len(ambiguous_source_keys),
+        "ambiguous_label_episode_path_count": len(ambiguous_label_keys),
         "skipped_label_count": len(skipped),
         "episodes": sorted(manifest_rows, key=lambda item: item["episode_index"]),
         "skipped_labels": skipped,
