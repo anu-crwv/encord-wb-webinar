@@ -31,6 +31,9 @@ TASK_TO_CAPTION = {
     "Sort tape & safety glasses (2)": "sort the tape and safety glasses",
     "Microfiber towels": "fold the microfiber towels",
     "Coil wire": "coil the wire",
+    "Plug ethernet cable into network device": "plug the ethernet cable into the network switch",
+    "Plug ethernet cable into network device 2": "plug the ethernet cable into the network switch",
+    "Plug ethernet cable into network switch 3": "plug the ethernet cable into the network switch",
 }
 
 
