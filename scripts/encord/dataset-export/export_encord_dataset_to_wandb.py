@@ -465,6 +465,7 @@ def write_dataset_metadata(
     write_json(meta_dir / "source_dataset_manifest.json", {
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "encord_dataset_hash": str(dataset_hash),
+        "encord_source_dataset_hash": str(dataset_hash),
         "encord_dataset_title": dataset_title,
         "episode_count": len(sorted_episodes),
         "camera_order": CAMERA_ORDER,
@@ -483,6 +484,7 @@ def write_dataset_metadata(
 
     return {
         "encord_dataset_hash": str(dataset_hash),
+        "encord_source_dataset_hash": str(dataset_hash),
         "encord_dataset_title": dataset_title,
         "episode_count": len(sorted_episodes),
         "video_count": len(sorted_source_items),
@@ -544,6 +546,7 @@ def export_dataset(
     if base_artifact is not None and not export_rows:
         return {
             "encord_dataset_hash": str(dataset_hash),
+            "encord_source_dataset_hash": str(dataset_hash),
             "encord_dataset_title": dataset.title,
             "episode_count": len(base_artifact["episodes"]),
             "video_count": len(base_artifact["source_items"]),
