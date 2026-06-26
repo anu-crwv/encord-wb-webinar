@@ -86,6 +86,15 @@ def required(config: dict[str, Any], key: str, label: str) -> Any:
     return value
 
 
+def configured_aliases(config: dict[str, Any]) -> list[str]:
+    aliases = config.get("aliases") or ["latest"]
+    if isinstance(aliases, str):
+        return [aliases]
+    if not isinstance(aliases, list):
+        raise typer.BadParameter("Label export config aliases must be a list or string.")
+    return [str(alias) for alias in aliases]
+
+
 def create_client():
     from encord.user_client import EncordUserClient
 
@@ -1108,6 +1117,7 @@ def log_to_wandb(
     metadata: dict[str, Any],
     source_artifact: dict[str, Any],
     output_dir: Path,
+    aliases: list[str],
 ) -> dict[str, Any]:
     import wandb
 
@@ -1152,7 +1162,6 @@ def log_to_wandb(
         label_artifact.add_file(str(labels_path), name="encord_labels.json")
         label_artifact.add_file(str(preview_path), name="label_preview_rows.json")
         label_artifact.add_file(str(manifest_path), name="label_export_manifest.json")
-        aliases = list(dict.fromkeys(["latest", "single-view", source_artifact["version"]]))
         logged_labels = run.log_artifact(label_artifact, aliases=aliases)
         logged_labels.wait()
         labels_ref = f"{label_name}:{logged_labels.version}"
@@ -1195,11 +1204,15 @@ def main(
         typer.Option(help="Required W&B dataset artifact this label overlay materializes with."),
     ],
     wandb_config: Annotated[Path, typer.Option(help="W&B config YAML.")] = DEFAULT_WANDB_CONFIG,
+    alias: Annotated[list[str] | None, typer.Option("--alias", help="W&B artifact alias. Repeatable.")] = None,
     limit: Annotated[int | None, typer.Option(help="Optional max number of caption episodes to export.")] = None,
 ) -> None:
     typer.echo("Loading config...")
     metadata = load_yaml(metadata_yaml, "metadata YAML")
-    metadata_notes = {key: value for key, value in metadata.items() if key != "source_artifact_ref"}
+    metadata_notes = {
+        key: value for key, value in metadata.items()
+        if key not in {"aliases", "source_artifact_ref"}
+    }
     wandb_settings = load_yaml(wandb_config, "W&B config")
     project_hash = str(required(metadata, "encord_project_hash", "metadata YAML"))
 
@@ -1267,6 +1280,7 @@ def main(
         metadata=metadata_notes,
         source_artifact=source_artifact,
         output_dir=output_dir,
+        aliases=alias or configured_aliases(metadata),
     )
     write_json(output_dir / "wandb_lineage.json", lineage)
 

@@ -5,4 +5,7 @@ label_version_note: "encord-captioning-agent captions; no QC."
 captioning_method: captioning-agent-v0
 qc_status: none
 curation_status: uncurated
+aliases:
+  - latest
+  - captions
 # source_artifact_ref: encord-source-data:v0
