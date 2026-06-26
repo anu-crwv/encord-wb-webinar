@@ -39,8 +39,8 @@ from helper.captioning_v1 import (
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parents[2]
-DEFAULT_SOURCE_PARQUET_CACHE_DIR = REPO_ROOT / "exports" / "encord-source-parquet-cache"
+MAIN_WORKTREE_EXPORTS_ROOT = Path("/Users/encordsf/Desktop/encord-wb-webinar/exports")
+DEFAULT_SOURCE_PARQUET_CACHE_DIR = MAIN_WORKTREE_EXPORTS_ROOT / "encord-dataset-export" / "_cache" / "s3"
 BUNDLE_SIZE = 100
 EPISODE_DIR_RE = re.compile(r"^episode_\d+(?:_[A-Za-z0-9]+)?$")
 
@@ -478,7 +478,7 @@ def main(
     ] = DEFAULT_ONTOLOGY_HASH,
     source_parquet_cache_dir: Annotated[
         Path,
-        typer.Option(help="Local cache root for source episode parquets."),
+        typer.Option(help="Shared S3 cache root for source episode parquets."),
     ] = DEFAULT_SOURCE_PARQUET_CACHE_DIR,
     limit: Annotated[int | None, typer.Option(help="Limit dataset rows for smoke runs.")] = None,
     overwrite: Annotated[
@@ -493,6 +493,7 @@ def main(
     client = create_client()
     dataset_hash_str = str(dataset_hash)
     validate_ontology(client, ontology_hash)
+    typer.echo(f"Using shared S3 cache at {source_parquet_cache_dir}")
     dataset, data_rows, metadata_by_hash, skipped = resolve_dataset_rows(
         client=client,
         dataset_hash=dataset_hash_str,
