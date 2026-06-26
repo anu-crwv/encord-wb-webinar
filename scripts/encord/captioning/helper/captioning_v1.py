@@ -189,4 +189,5 @@ def read_cached_parquet_table(
 ) -> Any:
     import pyarrow.parquet as pq
 
-    return pq.read_table(download_s3_to_cache(client_s3, uri, cache_root), columns=columns)
+    parquet_columns = list(columns) if columns is not None else None
+    return pq.read_table(download_s3_to_cache(client_s3, uri, cache_root), columns=parquet_columns)
