@@ -5,14 +5,13 @@
 #     "typer",
 # ]
 # ///
-"""Create one Language Instruction caption for every video row from an Encord folder."""
+"""Create one Language Instruction caption for every video row in an Encord project."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
 from typing import Annotated, Any
-from uuid import UUID
 
 import typer
 
@@ -24,7 +23,6 @@ from encord.objects.frames import Range
 
 CLASSIFICATION_TITLE = "Language Instruction"
 BUNDLE_SIZE = 100
-PAGE_SIZE = 1000
 
 
 def client_from_env() -> EncordUserClient:
@@ -51,30 +49,6 @@ def chunks(rows: list[Any]) -> list[list[Any]]:
     return [rows[index : index + BUNDLE_SIZE] for index in range(0, len(rows), BUNDLE_SIZE)]
 
 
-def folder_video_uuids(client: EncordUserClient, folder_hash: UUID) -> set[str]:
-    from encord.orm.storage import StorageItemType
-
-    folder = client.get_storage_folder(folder_hash)
-    return {
-        str(item.uuid)
-        for item in folder.find_items(item_types=[StorageItemType.VIDEO], page_size=PAGE_SIZE)
-    }
-
-
-def data_hashes_for_folder(project: Any, client: EncordUserClient, folder_hash: UUID) -> set[str]:
-    folder_items = folder_video_uuids(client, folder_hash)
-    datasets = list(project.list_datasets())
-    data_hashes = set()
-
-    for dataset_ref in datasets:
-        dataset = client.get_dataset(str(dataset_ref.dataset_hash))
-        for row in dataset.data_rows:
-            if str(getattr(row, "backing_item_uuid", "")) in folder_items:
-                data_hashes.add(str(row.uid))
-
-    return data_hashes
-
-
 def has_language_instruction(row: Any, classification_title: str) -> bool:
     for instance in row.get_classification_instances():
         ontology_item = getattr(instance, "ontology_item", None)
@@ -99,8 +73,7 @@ def add_instruction(row: Any, instruction: str, classification_title: str, overw
 
 def main(
     project_hash: Annotated[str, typer.Argument(help="Encord project hash.")],
-    folder_hash: Annotated[UUID, typer.Argument(help="Encord storage folder UUID.")],
-    instruction: Annotated[str, typer.Option(help="Language Instruction text to apply to every matching video.")],
+    instruction: Annotated[str, typer.Option(help="Language Instruction text to apply to every video.")],
     classification_title: Annotated[str, typer.Option(help="Text classification title in the ontology.")] = CLASSIFICATION_TITLE,
     overwrite: Annotated[bool, typer.Option(help="Overwrite existing Language Instruction captions.")] = False,
 ) -> None:
@@ -108,13 +81,12 @@ def main(
     client = client_from_env()
     project = client.get_project(project_hash)
 
-    data_hashes = data_hashes_for_folder(project, client, folder_hash)
-    rows = [row for row in project.list_label_rows_v2() if is_video(row) and str(row.data_hash) in data_hashes]
+    rows = [row for row in project.list_label_rows_v2() if is_video(row)]
     if not rows:
-        typer.echo("No matching video label rows found.")
+        typer.echo("No video label rows found.")
         return
 
-    typer.echo(f"Found {len(rows)} matching video label rows.")
+    typer.echo(f"Found {len(rows)} video label rows.")
     for chunk in chunks(rows):
         with project.create_bundle(bundle_size=len(chunk)) as bundle:
             for row in chunk:
