@@ -15,6 +15,7 @@ venv/
 # so they do NOT match source dirs like groot/vla/data/ (the dataset loader package must be committed).
 /checkpoints/
 /data/
+/exports/
 wandb/
 *.mp4
 # os/editor
@@ -22,3 +23,4 @@ wandb/
 .idea/
 .vscode/
 *.swp
+exports/
