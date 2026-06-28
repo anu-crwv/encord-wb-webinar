@@ -94,29 +94,36 @@ dataset/videos/chunk-000/observation.images.wrist_image_left/episode_000000.mp4
 dataset/videos/chunk-000/observation.images.wrist_image_right/episode_000000.mp4
 ```
 
-### Labels Artifact
+### Label Overlay Artifact
 
-The labels artifact versions label/caption/metadata trials.
+The label overlay artifact versions single-view Encord captions as the missing LeRobot/DROID
+`dataset/data` and `dataset/meta` pieces.
 
-Each labels artifact contains the missing LeRobot/DROID pieces, such as:
+The exporter reuses source parquet files from S3 for state/action/timing data, then rewrites task and
+language columns from Encord captions:
 
 ```text
 dataset/.../meta/...
 dataset/.../data/...
 ```
 
-Each labels artifact must record the exact dataset artifact it overlays:
+It requires the exact source dataset artifact it overlays:
 
-```yaml
-source_dataset_artifact: encord-source-data:vN
+```bash
+uv run --script scripts/encord/label-export/export_single_view_labels_to_wandb.py \
+  --metadata-yaml scripts/encord/label-export/export_metadata.yaml \
+  --source-artifact-ref encord-source-data:vN
 ```
+
+W&B logs this overlay under artifact type `dataset`, because the artifact collection already exists with
+that type and the artifact itself is a dataset fragment.
 
 ### Training
 
-A labels artifact alone is not trainable. To train, materialize both artifacts:
+A label overlay artifact alone is not trainable. To train, materialize both artifacts:
 
 ```text
-encord-source-data:vN + encord-labels:vM => local dataset/
+encord-source-data:vN + encord-single-view-labels:vM => local dataset/
 ```
 
 The episode paths must match across both artifacts. W&B artifact lineage is the source of truth for which dataset version was used with which label version.

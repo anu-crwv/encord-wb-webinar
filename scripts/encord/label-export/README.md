@@ -1,6 +1,10 @@
-# Label Export
+# Label Overlay Export
 
-Exports one Encord project's labels and source dataset metadata to W&B.
+Exports one Encord project's single-view caption labels to a W&B label overlay artifact that materializes
+with the 3-camera source dataset artifact.
+
+The exporter reuses the source episode parquet files from S3 for state/action/timing data, then rewrites
+the task and language annotation columns from Encord captions. It does not fabricate state/action values.
 
 ## Setup
 
@@ -20,12 +24,16 @@ Edit W&B settings:
 scripts/encord/wandb_config.yaml
 ```
 
-## Export Labels To W&B
+## Export Label Overlay To W&B
 
 ```bash
 uv run --script scripts/encord/label-export/export_single_view_labels_to_wandb.py \
-  --metadata-yaml scripts/encord/label-export/export_metadata.yaml
+  --metadata-yaml scripts/encord/label-export/export_metadata.yaml \
+  --source-artifact-ref encord-source-data:v0 \
+  --limit 3
 ```
+
+For a full export, omit `--limit`.
 
 Writes local files to:
 
@@ -35,14 +43,33 @@ exports/encord-label-export/<timestamp>/
 
 Logs:
 
-- source dataset artifact
-- labels artifact
+- label overlay artifact with `dataset/data/...` and `dataset/meta/...`
 - preview table with `language_instruction`
 
-## Convert Captions To DROID Layout
+The W&B artifact type is `dataset` because W&B artifact names cannot change type after creation, and this
+overlay is materialized as a dataset fragment.
 
-```bash
-uv run --script scripts/encord/label-export/export_encord_captions_to_droid.py --help
+The label overlay artifact is intended to be materialized together with the source dataset artifact:
+
+```text
+encord-source-data:vN + encord-single-view-labels:vM => local dataset/
 ```
 
-Use this for local DROID/LeRobot-style label files, not W&B versioning.
+The source dataset artifact provides:
+
+```text
+dataset/videos/...
+```
+
+The label overlay artifact provides:
+
+```text
+dataset/data/chunk-000/episode_000000.parquet
+dataset/meta/info.json
+dataset/meta/tasks.jsonl
+dataset/meta/episodes.jsonl
+```
+
+Each output parquet preserves the source columns such as `action`, `observation.state`, `timestamp`,
+and `frame_index`, then fills `task_index` and the `annotation.language.language_instruction{,_2,_3}`
+columns from the Encord caption.
