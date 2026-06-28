@@ -12,7 +12,7 @@ the task and language annotation columns from Encord captions. It does not fabri
 export ENCORD_SSH_KEY_FILE=/path/to/encord_ssh_private_key
 ```
 
-Edit run notes:
+Edit run notes and artifact tags:
 
 ```text
 scripts/encord/label-export/label_export_config.yaml
@@ -44,6 +44,7 @@ exports/encord-label-export/<timestamp>/
 Logs:
 
 - label overlay artifact with `dataset/data/...` and `dataset/meta/...`
+- configured tags as W&B artifact tags, with the `latest` alias applied automatically
 - preview table with `language_instruction`
 
 The W&B artifact type is `dataset` because W&B artifact names cannot change type after creation, and this

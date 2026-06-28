@@ -23,6 +23,7 @@ from pathlib import Path
 import re
 from typing import Annotated, Any
 from urllib.parse import unquote, urlparse
+from uuid import uuid4
 
 import typer
 import yaml
@@ -31,13 +32,17 @@ import yaml
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[2]
 DEFAULT_WANDB_CONFIG = SCRIPT_DIR.parent / "wandb_config.yaml"
+DEFAULT_YAML_CONFIG = SCRIPT_DIR / "label_export_config.yaml"
 EXPORT_ROOT = REPO_ROOT / "exports/encord-label-export"
+S3_CACHE_ROOT = REPO_ROOT / "exports/encord-dataset-export" / "_cache" / "s3"
 CHUNK_SIZE = 1000
 LANG_KEYS = [
     "annotation.language.language_instruction",
     "annotation.language.language_instruction_2",
     "annotation.language.language_instruction_3",
 ]
+LANGUAGE_INSTRUCTION_PATTERN = re.compile(r"^language instruction(?:\s*([123]))?$", re.IGNORECASE)
+LANGUAGE_INSTRUCTION_VALUE_PATTERN = re.compile(r"^language_instruction(?:_([123]))?$", re.IGNORECASE)
 REQUIRED_PARQUET_COLUMNS = ["action", "observation.state", "timestamp", "frame_index"]
 TROSSEN_STATE_ACTION_SPLITS = [
     ("left_joint_pos", 0, 7),
@@ -86,13 +91,13 @@ def required(config: dict[str, Any], key: str, label: str) -> Any:
     return value
 
 
-def configured_aliases(config: dict[str, Any]) -> list[str]:
-    aliases = config.get("aliases") or ["latest"]
-    if isinstance(aliases, str):
-        return [aliases]
-    if not isinstance(aliases, list):
-        raise typer.BadParameter("Label export config aliases must be a list or string.")
-    return [str(alias) for alias in aliases]
+def configured_tags(config: dict[str, Any]) -> list[str]:
+    tags = config.get("tags") or []
+    if isinstance(tags, str):
+        return [tags]
+    if not isinstance(tags, list):
+        raise typer.BadParameter("Label export config tags must be a list or string.")
+    return [str(tag) for tag in tags]
 
 
 def create_client():
@@ -126,6 +131,35 @@ def s3_client(unsigned: bool):
     if unsigned:
         return boto3.client("s3", config=Config(signature_version=UNSIGNED))
     return boto3.client("s3")
+
+
+def s3_cache_path(bucket: str, key: str) -> Path:
+    key_parts = key.split("/")
+    if not bucket or not key or any(part == ".." for part in key_parts):
+        raise ValueError(f"Unsafe S3 cache path for s3://{bucket}/{key}")
+    cache_parts = [part for part in key_parts if part not in {"", "."}]
+    if not cache_parts:
+        raise ValueError(f"Unsafe S3 cache path for s3://{bucket}/{key}")
+    return S3_CACHE_ROOT / bucket / Path(*cache_parts)
+
+
+def read_s3_cached_bytes(client_s3: Any, uri: str) -> tuple[bytes, bool]:
+    bucket, key = parse_s3_uri(uri)
+    cache_path = s3_cache_path(bucket, key)
+    downloaded = False
+
+    if not cache_path.exists():
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = cache_path.with_name(f".{cache_path.name}.{uuid4().hex}.tmp")
+        try:
+            client_s3.download_file(bucket, key, str(tmp_path))
+            os.replace(tmp_path, cache_path)
+            downloaded = True
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+    return cache_path.read_bytes(), downloaded
 
 
 def normalize_source_path(value: Any) -> str:
@@ -307,21 +341,35 @@ def source_dataset_items(metadata_by_hash: dict[str, dict[str, Any]]) -> list[di
     return items
 
 
-def language_instruction(label: Any) -> Any:
+def language_instruction_index(value: Any) -> int | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    for pattern in (LANGUAGE_INSTRUCTION_PATTERN, LANGUAGE_INSTRUCTION_VALUE_PATTERN):
+        match = pattern.fullmatch(normalized)
+        if match:
+            return int(match.group(1) or 1)
+    return None
+
+
+def language_instruction_candidates(label: Any) -> list[tuple[int, str]]:
+    candidates: list[tuple[int, str]] = []
     if isinstance(label, dict):
-        is_instruction = label.get("value") == "language_instruction" or label.get("name") == "Language Instruction"
-        if is_instruction and "answers" in label:
-            return label.get("answers")
-        for value in label.values():
-            found = language_instruction(value)
-            if found not in (None, ""):
-                return found
+        instruction_index = language_instruction_index(label.get("name"))
+        if instruction_index is None:
+            instruction_index = language_instruction_index(label.get("value"))
+        if instruction_index is not None and "answers" in label:
+            candidates.extend((instruction_index, text) for text in strings_from(label.get("answers")))
+
+        for key, value in label.items():
+            instruction_index = language_instruction_index(key)
+            if instruction_index is not None:
+                candidates.extend((instruction_index, text) for text in strings_from(value))
+            candidates.extend(language_instruction_candidates(value))
     elif isinstance(label, list):
         for value in label:
-            found = language_instruction(value)
-            if found not in (None, ""):
-                return found
-    return None
+            candidates.extend(language_instruction_candidates(value))
+    return candidates
 
 
 def strings_from(value: Any) -> list[str]:
@@ -341,8 +389,10 @@ def strings_from(value: Any) -> list[str]:
 
 
 def caption_text(label: dict[str, Any]) -> str | None:
-    strings = strings_from(language_instruction(label))
-    return strings[0] if strings else None
+    candidates = language_instruction_candidates(label)
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: item[0])[0][1]
 
 
 def preview_rows(labels: list[dict[str, Any]], metadata_by_hash: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -481,8 +531,7 @@ def row_match_key(row: dict[str, Any]) -> str | None:
 
 def read_s3_json(client_s3: Any, uri: str) -> dict[str, Any] | None:
     try:
-        bucket, key = parse_s3_uri(uri)
-        body = client_s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+        body, _ = read_s3_cached_bytes(client_s3, uri)
         return json.loads(body.decode("utf-8"))
     except Exception as exc:
         typer.echo(f"Warning: could not read {uri}: {exc}", err=True)
@@ -492,9 +541,8 @@ def read_s3_json(client_s3: Any, uri: str) -> dict[str, Any] | None:
 def download_parquet_table(client_s3: Any, uri: str):
     import pyarrow.parquet as pq
 
-    bucket, key = parse_s3_uri(uri)
-    body = client_s3.get_object(Bucket=bucket, Key=key)["Body"].read()
-    return pq.read_table(BytesIO(body))
+    body, downloaded = read_s3_cached_bytes(client_s3, uri)
+    return pq.read_table(BytesIO(body)), downloaded
 
 
 def set_column(table: Any, name: str, array: Any) -> Any:
@@ -561,7 +609,11 @@ def infer_features_from_table(table: Any) -> dict[str, Any]:
         field = table.schema.field(name)
         dtype = str(field.type)
         if name in {"action", "observation.state"} and hasattr(field.type, "list_size"):
-            features[name] = {"dtype": "float32", "shape": [field.type.list_size], "names": None}
+            features[name] = {
+                "dtype": "float32",
+                "shape": [field.type.list_size],
+                "names": TROSSEN_STATE_ACTION_NAMES,
+            }
         elif name in {"episode_index", "frame_index", "index", "task_index", *LANG_KEYS}:
             features[name] = {"dtype": "int64", "shape": [1], "names": None}
         elif name == "timestamp":
@@ -1002,7 +1054,10 @@ def export_label_overlay(
     first_table = None
     first_source_info = None
     total_frames = 0
+    parquet_cache_hits = 0
+    parquet_cache_downloads = 0
 
+    typer.echo(f"Using shared S3 object cache at {S3_CACHE_ROOT}")
     for index, (episode_index, row, source_episode) in enumerate(selected, start=1):
         caption = str(row["language_instruction"])
         task_id = task_to_id.setdefault(caption, len(task_to_id))
@@ -1010,9 +1065,16 @@ def export_label_overlay(
             task_rows.append({"task_index": task_id, "task": caption})
 
         parquet_uri = str(row["source_parquet_uri"])
-        typer.echo(f"[{index}/{len(selected)}] downloading {parquet_uri}")
+        table, downloaded = download_parquet_table(client_s3, parquet_uri)
+        if downloaded:
+            parquet_cache_downloads += 1
+            cache_status = "downloaded"
+        else:
+            parquet_cache_hits += 1
+            cache_status = "cached"
+        typer.echo(f"[{index}/{len(selected)}] {cache_status} {parquet_uri}")
         table = rewrite_label_table(
-            download_parquet_table(client_s3, parquet_uri),
+            table,
             episode_index=episode_index,
             global_start=total_frames,
             task_id=task_id,
@@ -1104,6 +1166,9 @@ def export_label_overlay(
         "ambiguous_source_episode_path_count": len(ambiguous_source_keys),
         "ambiguous_label_episode_path_count": len(ambiguous_label_keys),
         "skipped_label_count": len(skipped),
+        "s3_cache_root": str(S3_CACHE_ROOT),
+        "parquet_cache_hit_count": parquet_cache_hits,
+        "parquet_cache_download_count": parquet_cache_downloads,
         "episodes": sorted(manifest_rows, key=lambda item: item["episode_index"]),
         "skipped_labels": skipped,
     }
@@ -1117,7 +1182,7 @@ def log_to_wandb(
     metadata: dict[str, Any],
     source_artifact: dict[str, Any],
     output_dir: Path,
-    aliases: list[str],
+    tags: list[str],
 ) -> dict[str, Any]:
     import wandb
 
@@ -1162,7 +1227,7 @@ def log_to_wandb(
         label_artifact.add_file(str(labels_path), name="encord_labels.json")
         label_artifact.add_file(str(preview_path), name="label_preview_rows.json")
         label_artifact.add_file(str(manifest_path), name="label_export_manifest.json")
-        logged_labels = run.log_artifact(label_artifact, aliases=aliases)
+        logged_labels = run.log_artifact(label_artifact, aliases=["latest"], tags=tags)
         logged_labels.wait()
         labels_ref = f"{label_name}:{logged_labels.version}"
         typer.echo(f"Logged label overlay artifact {labels_ref}.")
@@ -1198,20 +1263,19 @@ def log_to_wandb(
 
 
 def main(
-    metadata_yaml: Annotated[Path, typer.Option(help="Required YAML notes for this dataset/label version.")],
     source_artifact_ref: Annotated[
         str,
         typer.Option(help="Required W&B dataset artifact this label overlay materializes with."),
     ],
+    metadata_yaml: Annotated[Path, typer.Option(help="Required YAML notes for this dataset/label version.")] = DEFAULT_YAML_CONFIG,
     wandb_config: Annotated[Path, typer.Option(help="W&B config YAML.")] = DEFAULT_WANDB_CONFIG,
-    alias: Annotated[list[str] | None, typer.Option("--alias", help="W&B artifact alias. Repeatable.")] = None,
     limit: Annotated[int | None, typer.Option(help="Optional max number of caption episodes to export.")] = None,
 ) -> None:
     typer.echo("Loading config...")
     metadata = load_yaml(metadata_yaml, "metadata YAML")
     metadata_notes = {
         key: value for key, value in metadata.items()
-        if key not in {"aliases", "source_artifact_ref"}
+        if key not in {"tags", "source_artifact_ref"}
     }
     wandb_settings = load_yaml(wandb_config, "W&B config")
     project_hash = str(required(metadata, "encord_project_hash", "metadata YAML"))
@@ -1280,7 +1344,7 @@ def main(
         metadata=metadata_notes,
         source_artifact=source_artifact,
         output_dir=output_dir,
-        aliases=alias or configured_aliases(metadata),
+        tags=configured_tags(metadata),
     )
     write_json(output_dir / "wandb_lineage.json", lineage)
 

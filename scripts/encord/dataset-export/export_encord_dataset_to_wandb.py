@@ -5,6 +5,7 @@
 #     "botocore",
 #     "encord @ git+ssh://git@github.com/encord-team/encord-client-python-private.git@b1edece2",
 #     "pyyaml",
+#     "tqdm",
 #     "typer",
 #     "wandb>=0.18.0",
 # ]
@@ -17,12 +18,14 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import shutil
 from typing import Annotated, Any
 from urllib.parse import unquote, urlparse
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import typer
 import yaml
+from tqdm import tqdm
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -30,6 +33,7 @@ REPO_ROOT = SCRIPT_DIR.parents[2]
 DEFAULT_WANDB_CONFIG = SCRIPT_DIR.parent / "wandb_config.yaml"
 DEFAULT_EXPORT_CONFIG = SCRIPT_DIR / "dataset_export_config.yaml"
 EXPORT_ROOT = REPO_ROOT / "exports/encord-dataset-export"
+S3_CACHE_ROOT = EXPORT_ROOT / "_cache" / "s3"
 CHUNK_SIZE = 1000
 CAMERA_ORDER = ["cam_high", "cam_left_wrist", "cam_right_wrist"]
 CAMERA_TO_DROID_KEY = {
@@ -61,13 +65,13 @@ def required(config: dict[str, Any], key: str, label: str) -> Any:
     return value
 
 
-def configured_aliases(config: dict[str, Any]) -> list[str]:
-    aliases = config.get("aliases") or ["latest"]
-    if isinstance(aliases, str):
-        return [aliases]
-    if not isinstance(aliases, list):
-        raise typer.BadParameter("Dataset export config aliases must be a list or string.")
-    return [str(alias) for alias in aliases]
+def configured_tags(config: dict[str, Any]) -> list[str]:
+    tags = config.get("tags") or []
+    if isinstance(tags, str):
+        return [tags]
+    if not isinstance(tags, list):
+        raise typer.BadParameter("Dataset export config tags must be a list or string.")
+    return [str(tag) for tag in tags]
 
 
 def configured_description(config: dict[str, Any], summary: dict[str, Any]) -> str:
@@ -225,10 +229,44 @@ def lerobot_video_path(episode_index: int, camera_name: str) -> Path:
     return Path("dataset") / "videos" / f"chunk-{chunk:03d}" / video_key / f"episode_{episode_index:06d}.mp4"
 
 
-def download_video(client_s3: Any, uri: str, destination: Path) -> None:
-    bucket, key = parse_s3_uri(uri)
+def s3_cache_path(bucket: str, key: str) -> Path:
+    key_parts = key.split("/")
+    if not bucket or not key or any(part == ".." for part in key_parts):
+        raise ValueError(f"Unsafe S3 cache path for s3://{bucket}/{key}")
+    cache_parts = [part for part in key_parts if part not in {"", "."}]
+    if not cache_parts:
+        raise ValueError(f"Unsafe S3 cache path for s3://{bucket}/{key}")
+    return S3_CACHE_ROOT / bucket / Path(*cache_parts)
+
+
+def link_or_copy(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    client_s3.download_file(bucket, key, str(destination))
+    if destination.exists():
+        return
+    try:
+        os.link(source, destination)
+    except OSError:
+        shutil.copy2(source, destination)
+
+
+def download_video(client_s3: Any, uri: str, destination: Path) -> bool:
+    bucket, key = parse_s3_uri(uri)
+    cache_path = s3_cache_path(bucket, key)
+    downloaded = False
+
+    if not cache_path.exists():
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = cache_path.with_name(f".{cache_path.name}.{uuid4().hex}.tmp")
+        try:
+            client_s3.download_file(bucket, key, str(tmp_path))
+            os.replace(tmp_path, cache_path)
+            downloaded = True
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+    link_or_copy(cache_path, destination)
+    return downloaded
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -452,12 +490,14 @@ def write_dataset_metadata(
     base_artifact: dict[str, Any] | None,
     new_episode_count: int,
     new_video_count: int,
+    skipped_incomplete_groups: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     video_keys = [f"observation.images.{CAMERA_TO_DROID_KEY[camera]}" for camera in CAMERA_ORDER]
     sorted_episodes = sorted(episodes, key=lambda row: int(row["episode_index"]))
     sorted_source_items = sorted(source_items, key=source_item_sort_key)
     preserved_episode_count = len(base_artifact["episodes"]) if base_artifact else 0
     preserved_video_count = len(base_artifact["source_items"]) if base_artifact else 0
+    skipped_incomplete_groups = skipped_incomplete_groups or []
 
     meta_dir = output_dir / "dataset" / "meta"
     write_jsonl(meta_dir / "episodes.jsonl", sorted_episodes)
@@ -473,6 +513,8 @@ def write_dataset_metadata(
         "lerobot_root": "dataset",
         "preserved_episode_count": preserved_episode_count,
         "new_episode_count": new_episode_count,
+        "skipped_incomplete_group_count": len(skipped_incomplete_groups),
+        "skipped_incomplete_groups": skipped_incomplete_groups,
         **base_artifact_fields(base_artifact),
     })
     write_json(meta_dir / "info.json", build_info(
@@ -492,8 +534,20 @@ def write_dataset_metadata(
         "preserved_video_count": preserved_video_count,
         "new_episode_count": new_episode_count,
         "new_video_count": new_video_count,
+        "skipped_incomplete_group_count": len(skipped_incomplete_groups),
+        "skipped_incomplete_groups": skipped_incomplete_groups,
         "local_dataset_dir": str(output_dir / "dataset"),
         **base_artifact_fields(base_artifact),
+    }
+
+
+def incomplete_group_record(row: Any, group_item: Any, missing_cameras: list[str]) -> dict[str, Any]:
+    return {
+        "data_hash": str(row.uid),
+        "data_title": row.title,
+        "data_group_uuid": str(group_item.uuid),
+        "data_group_name": getattr(group_item, "name", None),
+        "missing_cameras": missing_cameras,
     }
 
 
@@ -543,71 +597,97 @@ def export_dataset(
         )
     typer.echo(f"Exporting {len(export_rows)} new Encord data groups...")
 
-    if base_artifact is not None and not export_rows:
-        return {
-            "encord_dataset_hash": str(dataset_hash),
-            "encord_source_dataset_hash": str(dataset_hash),
-            "encord_dataset_title": dataset.title,
-            "episode_count": len(base_artifact["episodes"]),
-            "video_count": len(base_artifact["source_items"]),
-            "preserved_episode_count": len(base_artifact["episodes"]),
-            "preserved_video_count": len(base_artifact["source_items"]),
-            "new_episode_count": 0,
-            "new_video_count": 0,
-            "local_dataset_dir": str(output_dir / "dataset"),
-            **base_artifact_fields(base_artifact),
-        }
-
     client_s3 = s3_client(unsigned_s3)
     base_episodes = list((base_artifact or {}).get("episodes") or [])
     base_source_items = list((base_artifact or {}).get("source_items") or [])
     new_episodes = []
     new_source_items = []
+    skipped_incomplete_groups = []
     fps_values = []
     first_episode_index = next_episode_index(base_episodes)
+    cache_hits = 0
+    cache_downloads = 0
 
-    for offset, (row, group_item) in enumerate(export_rows):
-        episode_index = first_episode_index + offset
-        videos = video_children_by_camera(group_item, client)
-        missing = [camera for camera in CAMERA_ORDER if camera not in videos]
-        if missing:
-            raise ValueError(f"Group {group_item.uuid} is missing camera videos: {missing}")
+    total_video_files = len(export_rows) * len(CAMERA_ORDER)
+    typer.echo(f"Using shared S3 video cache at {S3_CACHE_ROOT}")
+    typer.echo("Checking each data group's cameras as it is exported; incomplete groups are skipped.")
+    with tqdm(
+        total=total_video_files,
+        desc="Exporting video slots",
+        unit="file",
+        dynamic_ncols=True,
+        mininterval=5.0,
+    ) as progress:
+        for row, group_item in export_rows:
+            videos = video_children_by_camera(group_item, client)
+            missing = [camera for camera in CAMERA_ORDER if camera not in videos]
+            if missing:
+                skipped_incomplete_groups.append(incomplete_group_record(row, group_item, missing))
+                progress.write(
+                    f"Skipping incomplete data group {row.title} ({row.uid}); "
+                    f"missing cameras: {', '.join(missing)}"
+                )
+                progress.set_postfix(
+                    {
+                        "cached": cache_hits,
+                        "downloaded": cache_downloads,
+                        "skipped_groups": len(skipped_incomplete_groups),
+                    },
+                    refresh=False,
+                )
+                progress.update(len(CAMERA_ORDER))
+                continue
 
-        typer.echo(f"[{offset + 1}/{len(export_rows)}] {group_item.name} -> episode {episode_index}")
-        for camera_name in CAMERA_ORDER:
-            item = videos[camera_name]
-            uri = source_uri(item)
-            fps = item_fps(item)
-            if fps is not None:
-                fps_values.append(fps)
-            relative_path = lerobot_video_path(episode_index, camera_name)
-            local_path = output_dir / relative_path
-            typer.echo(f"  downloading {camera_name}: {uri}")
-            download_video(client_s3, uri, local_path)
-            new_source_items.append({
+            episode_index = first_episode_index + len(new_episodes)
+            for camera_name in CAMERA_ORDER:
+                item = videos[camera_name]
+                uri = source_uri(item)
+                fps = item_fps(item)
+                if fps is not None:
+                    fps_values.append(fps)
+                relative_path = lerobot_video_path(episode_index, camera_name)
+                local_path = output_dir / relative_path
+                downloaded = download_video(client_s3, uri, local_path)
+                if downloaded:
+                    cache_downloads += 1
+                else:
+                    cache_hits += 1
+                progress.set_postfix(
+                    {
+                        "cached": cache_hits,
+                        "downloaded": cache_downloads,
+                        "skipped_groups": len(skipped_incomplete_groups),
+                    },
+                    refresh=False,
+                )
+                progress.update()
+                new_source_items.append({
+                    "episode_index": episode_index,
+                    "data_hash": row.uid,
+                    "data_group_uuid": str(group_item.uuid),
+                    "video_storage_item_uuid": str(item.uuid),
+                    "camera_name": camera_name,
+                    "video_key": str(Path(relative_path).parent.relative_to(
+                        Path("dataset") / "videos" / f"chunk-{episode_index // CHUNK_SIZE:03d}"
+                    )),
+                    "artifact_path": str(relative_path),
+                    "source_uri": uri,
+                    "fps": fps,
+                    "client_metadata": item_metadata(item),
+                })
+
+            new_episodes.append({
                 "episode_index": episode_index,
-                "data_hash": row.uid,
-                "data_group_uuid": str(group_item.uuid),
-                "video_storage_item_uuid": str(item.uuid),
-                "camera_name": camera_name,
-                "video_key": str(Path(relative_path).parent.relative_to(
-                    Path("dataset") / "videos" / f"chunk-{episode_index // CHUNK_SIZE:03d}"
-                )),
-                "artifact_path": str(relative_path),
-                "source_uri": uri,
-                "fps": fps,
-                "client_metadata": item_metadata(item),
+                "tasks": [],
+                "length": None,
+                "success": None,
+                "encord_data_hash": str(row.uid),
+                "encord_data_group_uuid": str(group_item.uuid),
+                "encord_data_title": row.title,
             })
 
-        new_episodes.append({
-            "episode_index": episode_index,
-            "tasks": [],
-            "length": None,
-            "success": None,
-            "encord_data_hash": str(row.uid),
-            "encord_data_group_uuid": str(group_item.uuid),
-            "encord_data_title": row.title,
-        })
+    if skipped_incomplete_groups:
+        typer.echo(f"Skipped {len(skipped_incomplete_groups)} incomplete data groups.")
 
     dataset_fps = combined_fps((base_artifact or {}).get("info"), fps_values)
     return write_dataset_metadata(
@@ -620,6 +700,7 @@ def export_dataset(
         base_artifact=base_artifact,
         new_episode_count=len(new_episodes),
         new_video_count=len(new_source_items),
+        skipped_incomplete_groups=skipped_incomplete_groups,
     )
 
 
@@ -635,7 +716,7 @@ def log_to_wandb(
     wandb_config: dict[str, Any],
     output_dir: Path,
     summary: dict[str, Any],
-    aliases: list[str],
+    tags: list[str],
     description: str,
     base_artifact: dict[str, Any] | None,
 ) -> dict[str, str]:
@@ -658,7 +739,7 @@ def log_to_wandb(
                 description=description,
             )
             artifact.add_dir(str(output_dir / "dataset"), name="dataset")
-            logged = run.log_artifact(artifact, aliases=aliases)
+            logged = run.log_artifact(artifact, aliases=["latest"], tags=tags)
         else:
             typer.echo(f"Using base dataset artifact {base_artifact['resolved_ref']}.")
             saved = run.use_artifact(base_artifact["resolved_ref"])
@@ -674,7 +755,7 @@ def log_to_wandb(
             typer.echo(f"Adding {len(new_files)} new artifact files to incremental draft...")
             for path in new_files:
                 draft.add_file(str(path), name=path.relative_to(output_dir).as_posix())
-            logged = run.log_artifact(draft, aliases=aliases)
+            logged = run.log_artifact(draft, aliases=["latest"], tags=tags)
 
         logged.wait()
         artifact_ref = f"{artifact_name}:{logged.version}"
@@ -686,7 +767,6 @@ def main(
     wandb_config: Annotated[Path, typer.Option(help="W&B config YAML.")] = DEFAULT_WANDB_CONFIG,
     export_config: Annotated[Path, typer.Option(help="Dataset export config YAML.")] = DEFAULT_EXPORT_CONFIG,
     limit: Annotated[int | None, typer.Option(help="Optional max number of data groups to export.")] = None,
-    alias: Annotated[list[str] | None, typer.Option("--alias", help="W&B artifact alias. Repeatable.")] = None,
     unsigned_s3: Annotated[bool, typer.Option(help="Use unsigned S3 requests for public buckets.")] = False,
     base_artifact_ref: Annotated[
         str | None,
@@ -726,7 +806,7 @@ def main(
         wandb_config=wandb_settings,
         output_dir=output_dir,
         summary=summary,
-        aliases=alias or configured_aliases(export_settings),
+        tags=configured_tags(export_settings),
         description=configured_description(export_settings, summary),
         base_artifact=base_artifact,
     )

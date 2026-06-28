@@ -82,11 +82,12 @@ export ENCORD_SSH_KEY_FILE=/path/to/encord_ssh_private_key
 
 uv run --script scripts/encord/dataset-export/export_encord_dataset_to_wandb.py \
   --dataset-hash <encord_dataset_hash> \
-  --limit 3 \
-  --alias v0
+  --limit 3
 ```
 
 The script writes local files under `exports/encord-dataset-export/<timestamp>/` and logs `encord-source-data:vN` to W&B. Inside the artifact, videos are stored at:
+
+Artifact tags come from `scripts/encord/dataset-export/dataset_export_config.yaml`, and the `latest` alias is applied automatically.
 
 ```text
 dataset/videos/chunk-000/observation.images.exterior_image_1_left/episode_000000.mp4
