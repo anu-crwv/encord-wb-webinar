@@ -14,11 +14,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import shutil
+import time
 from typing import Annotated, Any
 from urllib.parse import unquote, urlparse
 from uuid import UUID, uuid4
@@ -34,6 +36,10 @@ DEFAULT_WANDB_CONFIG = SCRIPT_DIR.parent / "wandb_config.yaml"
 DEFAULT_EXPORT_CONFIG = SCRIPT_DIR / "dataset_export_config.yaml"
 EXPORT_ROOT = REPO_ROOT / "exports/encord-dataset-export"
 S3_CACHE_ROOT = EXPORT_ROOT / "_cache" / "s3"
+ENCORD_API_MAX_ATTEMPTS = 5
+ENCORD_API_RETRY_BASE_SECONDS = 2.0
+S3_DOWNLOAD_MAX_ATTEMPTS = 4
+S3_DOWNLOAD_RETRY_BASE_SECONDS = 3.0
 CHUNK_SIZE = 1000
 CAMERA_ORDER = ["cam_high", "cam_left_wrist", "cam_right_wrist"]
 CAMERA_TO_DROID_KEY = {
@@ -189,11 +195,47 @@ def s3_client(unsigned: bool):
     return boto3.client("s3")
 
 
+def retry_call(label: str, call: Callable[[], Any], *, max_attempts: int, base_seconds: float) -> Any:
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return call()
+        except Exception as exc:
+            if attempt == max_attempts:
+                raise
+            sleep_seconds = base_seconds * (2 ** (attempt - 1))
+            typer.echo(
+                f"Warning: {label} failed with {type(exc).__name__}: {exc}; "
+                f"retrying in {sleep_seconds:.0f}s "
+                f"({attempt}/{max_attempts})",
+                err=True,
+            )
+            time.sleep(sleep_seconds)
+
+
+def retry_encord_call(label: str, call: Callable[[], Any]) -> Any:
+    return retry_call(
+        label,
+        call,
+        max_attempts=ENCORD_API_MAX_ATTEMPTS,
+        base_seconds=ENCORD_API_RETRY_BASE_SECONDS,
+    )
+
+
+def retry_s3_call(label: str, call: Callable[[], Any]) -> Any:
+    return retry_call(
+        label,
+        call,
+        max_attempts=S3_DOWNLOAD_MAX_ATTEMPTS,
+        base_seconds=S3_DOWNLOAD_RETRY_BASE_SECONDS,
+    )
+
+
 def group_children(item: Any, client: Any) -> list[Any]:
-    children_by_uuid = {str(child.uuid): child for child in item.get_child_items()}
+    children = retry_encord_call(f"get child items for data group {item.uuid}", item.get_child_items)
+    children_by_uuid = {str(child.uuid): child for child in children}
 
     try:
-        summary = item.get_summary()
+        summary = retry_encord_call(f"get summary for data group {item.uuid}", item.get_summary)
     except Exception:
         return list(children_by_uuid.values())
 
@@ -204,7 +246,11 @@ def group_children(item: Any, client: Any) -> list[Any]:
             if str(child.uuid) not in children_by_uuid
         ]
         if child_uuids:
-            for child in client.get_storage_items(child_uuids):
+            fetched_children = retry_encord_call(
+                f"bulk fetch {len(child_uuids)} child storage items for data group {item.uuid}",
+                lambda: client.get_storage_items(child_uuids),
+            )
+            for child in fetched_children:
                 children_by_uuid[str(child.uuid)] = child
 
     return list(children_by_uuid.values())
@@ -541,13 +587,22 @@ def write_dataset_metadata(
     }
 
 
-def incomplete_group_record(row: Any, group_item: Any, missing_cameras: list[str]) -> dict[str, Any]:
+def incomplete_group_record(
+    row: Any,
+    group_item: Any | None,
+    missing_cameras: list[str],
+    *,
+    reason: str = "missing_cameras",
+    error: str | None = None,
+) -> dict[str, Any]:
     return {
         "data_hash": str(row.uid),
         "data_title": row.title,
-        "data_group_uuid": str(group_item.uuid),
+        "data_group_uuid": str(getattr(group_item, "uuid", None) or getattr(row, "backing_item_uuid", "")),
         "data_group_name": getattr(group_item, "name", None),
         "missing_cameras": missing_cameras,
+        "skip_reason": reason,
+        "error": error,
     }
 
 
@@ -560,9 +615,10 @@ def export_dataset(
     unsigned_s3: bool,
     base_artifact: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    dataset = client.get_dataset(dataset_hash)
-    data_rows = list(dataset.data_rows)
+    dataset = retry_encord_call(f"get dataset {dataset_hash}", lambda: client.get_dataset(dataset_hash))
+    data_rows = retry_encord_call(f"list data rows for dataset {dataset_hash}", lambda: list(dataset.data_rows))
     typer.echo(f"Found {len(data_rows)} Encord data groups in dataset {dataset_hash}.")
+    skipped_incomplete_groups = []
 
     existing_data_hashes, existing_group_uuids = base_identity_sets(base_artifact)
     if base_artifact is None and limit is not None:
@@ -575,16 +631,59 @@ def export_dataset(
         candidate_rows = candidate_rows[:limit]
 
     backing_ids = [row.backing_item_uuid for row in candidate_rows]
-    group_items_by_uuid = {
-        str(item.uuid): item for item in client.get_storage_items(backing_ids)
-    } if backing_ids else {}
+    fetched_group_items = []
+    skipped_backing_data_hashes = set()
+    if backing_ids:
+        try:
+            fetched_group_items = retry_encord_call(
+                f"bulk fetch {len(backing_ids)} backing storage items",
+                lambda: client.get_storage_items(backing_ids),
+            )
+        except Exception as exc:
+            typer.echo(
+                f"Warning: bulk backing item fetch failed with {type(exc).__name__}: {exc}; "
+                "falling back to one-by-one fetches.",
+                err=True,
+            )
+            for row in candidate_rows:
+                try:
+                    fetched_group_items.extend(
+                        retry_encord_call(
+                            f"fetch backing storage item {row.backing_item_uuid}",
+                            lambda row=row: client.get_storage_items([row.backing_item_uuid]),
+                        )
+                    )
+                except Exception as row_exc:
+                    skipped_incomplete_groups.append(
+                        incomplete_group_record(
+                            row,
+                            None,
+                            CAMERA_ORDER,
+                            reason="backing_storage_item_fetch_error",
+                            error=f"{type(row_exc).__name__}: {row_exc}",
+                        )
+                    )
+                    skipped_backing_data_hashes.add(str(row.uid))
+
+    group_items_by_uuid = {str(item.uuid): item for item in fetched_group_items}
 
     export_rows = []
     skipped_existing_by_group = 0
     for row in candidate_rows:
+        if str(row.uid) in skipped_backing_data_hashes:
+            continue
         group_item = group_items_by_uuid.get(str(row.backing_item_uuid))
         if group_item is None:
-            raise ValueError(f"Could not resolve backing storage item for data row {row.uid}")
+            skipped_incomplete_groups.append(
+                incomplete_group_record(
+                    row,
+                    None,
+                    CAMERA_ORDER,
+                    reason="missing_backing_storage_item",
+                    error=f"Could not resolve backing storage item {row.backing_item_uuid}",
+                )
+            )
+            continue
         if str(group_item.uuid) in existing_group_uuids:
             skipped_existing_by_group += 1
             continue
@@ -602,7 +701,6 @@ def export_dataset(
     base_source_items = list((base_artifact or {}).get("source_items") or [])
     new_episodes = []
     new_source_items = []
-    skipped_incomplete_groups = []
     fps_values = []
     first_episode_index = next_episode_index(base_episodes)
     cache_hits = 0
@@ -619,7 +717,33 @@ def export_dataset(
         mininterval=5.0,
     ) as progress:
         for row, group_item in export_rows:
-            videos = video_children_by_camera(group_item, client)
+            try:
+                videos = video_children_by_camera(group_item, client)
+            except Exception as exc:
+                skipped_incomplete_groups.append(
+                    incomplete_group_record(
+                        row,
+                        group_item,
+                        CAMERA_ORDER,
+                        reason="encord_api_error",
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                )
+                progress.write(
+                    f"Skipping data group {row.title} ({row.uid}) after Encord API failure: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                progress.set_postfix(
+                    {
+                        "cached": cache_hits,
+                        "downloaded": cache_downloads,
+                        "skipped_groups": len(skipped_incomplete_groups),
+                    },
+                    refresh=False,
+                )
+                progress.update(len(CAMERA_ORDER))
+                continue
+
             missing = [camera for camera in CAMERA_ORDER if camera not in videos]
             if missing:
                 skipped_incomplete_groups.append(incomplete_group_record(row, group_item, missing))
@@ -639,52 +763,111 @@ def export_dataset(
                 continue
 
             episode_index = first_episode_index + len(new_episodes)
+            group_source_items = []
+            group_fps_values = []
+            completed_slots = 0
             for camera_name in CAMERA_ORDER:
-                item = videos[camera_name]
-                uri = source_uri(item)
-                fps = item_fps(item)
-                if fps is not None:
-                    fps_values.append(fps)
-                relative_path = lerobot_video_path(episode_index, camera_name)
-                local_path = output_dir / relative_path
-                downloaded = download_video(client_s3, uri, local_path)
-                if downloaded:
-                    cache_downloads += 1
-                else:
-                    cache_hits += 1
-                progress.set_postfix(
-                    {
-                        "cached": cache_hits,
-                        "downloaded": cache_downloads,
-                        "skipped_groups": len(skipped_incomplete_groups),
-                    },
-                    refresh=False,
-                )
-                progress.update()
-                new_source_items.append({
-                    "episode_index": episode_index,
-                    "data_hash": row.uid,
-                    "data_group_uuid": str(group_item.uuid),
-                    "video_storage_item_uuid": str(item.uuid),
-                    "camera_name": camera_name,
-                    "video_key": str(Path(relative_path).parent.relative_to(
-                        Path("dataset") / "videos" / f"chunk-{episode_index // CHUNK_SIZE:03d}"
-                    )),
-                    "artifact_path": str(relative_path),
-                    "source_uri": uri,
-                    "fps": fps,
-                    "client_metadata": item_metadata(item),
-                })
+                try:
+                    item = videos[camera_name]
+                    uri = source_uri(item)
+                    fps = item_fps(item)
+                    relative_path = lerobot_video_path(episode_index, camera_name)
+                    local_path = output_dir / relative_path
+                    downloaded = retry_s3_call(
+                        f"download {camera_name} video for data group {row.uid}",
+                        lambda: download_video(client_s3, uri, local_path),
+                    )
+                    if downloaded:
+                        cache_downloads += 1
+                    else:
+                        cache_hits += 1
+                    if fps is not None:
+                        group_fps_values.append(fps)
+                    group_source_items.append({
+                        "episode_index": episode_index,
+                        "data_hash": row.uid,
+                        "data_group_uuid": str(group_item.uuid),
+                        "video_storage_item_uuid": str(item.uuid),
+                        "camera_name": camera_name,
+                        "video_key": str(Path(relative_path).parent.relative_to(
+                            Path("dataset") / "videos" / f"chunk-{episode_index // CHUNK_SIZE:03d}"
+                        )),
+                        "artifact_path": str(relative_path),
+                        "source_uri": uri,
+                        "fps": fps,
+                        "client_metadata": item_metadata(item),
+                    })
+                    completed_slots += 1
+                    progress.set_postfix(
+                        {
+                            "cached": cache_hits,
+                            "downloaded": cache_downloads,
+                            "skipped_groups": len(skipped_incomplete_groups),
+                        },
+                        refresh=False,
+                    )
+                    progress.update()
+                except Exception as exc:
+                    skipped_incomplete_groups.append(
+                        incomplete_group_record(
+                            row,
+                            group_item,
+                            [],
+                            reason="video_export_error",
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+                    )
+                    progress.write(
+                        f"Skipping data group {row.title} ({row.uid}) after {camera_name} export failure: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    progress.set_postfix(
+                        {
+                            "cached": cache_hits,
+                            "downloaded": cache_downloads,
+                            "skipped_groups": len(skipped_incomplete_groups),
+                        },
+                        refresh=False,
+                    )
+                    progress.update(len(CAMERA_ORDER) - completed_slots)
+                    break
+            else:
+                try:
+                    combined_fps((base_artifact or {}).get("info"), fps_values + group_fps_values)
+                except ValueError as exc:
+                    skipped_incomplete_groups.append(
+                        incomplete_group_record(
+                            row,
+                            group_item,
+                            [],
+                            reason="fps_mismatch",
+                            error=str(exc),
+                        )
+                    )
+                    progress.write(
+                        f"Skipping data group {row.title} ({row.uid}) due to FPS mismatch: {exc}"
+                    )
+                    progress.set_postfix(
+                        {
+                            "cached": cache_hits,
+                            "downloaded": cache_downloads,
+                            "skipped_groups": len(skipped_incomplete_groups),
+                        },
+                        refresh=False,
+                    )
+                    continue
 
-            new_episodes.append({
-                "episode_index": episode_index,
-                "tasks": [],
-                "length": None,
-                "success": None,
-                "encord_data_hash": str(row.uid),
-                "encord_data_group_uuid": str(group_item.uuid),
-                "encord_data_title": row.title,
-            })
+                fps_values.extend(group_fps_values)
+                new_source_items.extend(group_source_items)
+                new_episodes.append({
+                    "episode_index": episode_index,
+                    "tasks": [],
+                    "length": None,
+                    "success": None,
+                    "encord_data_hash": str(row.uid),
+                    "encord_data_group_uuid": str(group_item.uuid),
+                    "encord_data_title": row.title,
+                })
 
     if skipped_incomplete_groups:
         typer.echo(f"Skipped {len(skipped_incomplete_groups)} incomplete data groups.")
