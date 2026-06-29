@@ -135,7 +135,8 @@ def main() -> None:
     try:
         with SimulationAppContext(args_cli):
             # Register our Trossen embodiment now the sim app (and isaaclab) is up.
-            import isaaclab_arena_dreamzero.embodiments  # noqa: F401
+            import isaaclab_arena_dreamzero.embodiments  # noqa: F401  (register trossen embodiment)
+            import isaaclab_arena_dreamzero.environments  # noqa: F401  (register trossen_pick_and_place)
 
             _ENV = load_env(job.arena_env_args, job.name)
             _POLICY = get_policy_from_job(job)

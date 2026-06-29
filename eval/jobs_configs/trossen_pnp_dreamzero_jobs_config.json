@@ -1,20 +1,21 @@
 {
   "_comment": [
     "Isaac Lab-Arena eval jobs config for the fine-tuned Trossen DreamZero LoRA.",
-    "Modeled on isaaclab_arena_environments/eval_jobs_configs/droid_pnp_srl_openpi_jobs_config.json.",
-    "Reuses Arena's embodiment-agnostic pick_and_place_maple_table environment (scene + task +",
-    "success predicate) with our authored 'trossen_mobile_ai' embodiment (eval/isaaclab_arena_dreamzero/",
-    "embodiments). Run via eval/run_trossen_eval.py so the embodiment + DreamZeroRemotePolicy register.",
-    "TODO(sim): confirm pick_and_place_maple_table composes with the bimanual mobile embodiment; if not,",
-    "author a Trossen-specific scene/task. Camera extrinsics + gripper mimic also need in-sim tuning."
+    "Uses our custom 'trossen_pick_and_place' environment (raised work table so objects are in the",
+    "tall Trossen mobile robot's reach) + the 'trossen_mobile_ai' embodiment. Run via",
+    "eval/run_trossen_eval.py (imports isaaclab_arena_dreamzero.environments + .embodiments to register).",
+    "Tune table pose with WAM_TABLE_X/Y/Z env; camera aim is in the embodiment (trossen.py)."
   ],
   "jobs": [
     {
       "name": "trossen_pnp_dreamzero_cube_in_bowl",
       "arena_env_args": {
         "enable_cameras": true,
-        "environment": "pick_and_place_maple_table",
-        "embodiment": "trossen_mobile_ai"
+        "environment": "trossen_pick_and_place",
+        "embodiment": "trossen_mobile_ai",
+        "pick_up_object": "rubiks_cube_hot3d_robolab",
+        "destination_location": "bowl_ycb_robolab",
+        "hdr": "home_office_robolab"
       },
       "num_episodes": 10,
       "language_instruction": "Pick up the cube and place it in the bowl.",

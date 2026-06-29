@@ -1,87 +1,81 @@
-# Evaluation — Trossen DreamZero sim eval (Isaac Lab-Arena)
+# Evaluation — Trossen DreamZero eval suite (built from scratch)
 
-A simulation eval for the fine-tuned **Trossen** DreamZero model (`dreamzero-trossen-lora`,
-bimanual mobile, 16-dim action, 3 RGB cameras), built on **NVIDIA Isaac Lab-Arena**
-(`github.com/isaac-sim/IsaacLab-Arena`) — the general, embodiment-swappable successor to the
-DROID-only `arhanjain/sim-evals`. Arena runs the sim + camera render on an RTX GPU and calls our
-model over a websocket policy server, exactly like the bundled `isaaclab_arena_openpi` (pi0)
-adapter.
+## Why this exists (the problem)
 
-> Scoping/decision rationale lives in the plan doc; this README is the implementation reference.
+We fine-tuned a DreamZero (groot) world-action model on a **new embodiment** — the Trossen AI
+mobile bimanual robot (`dreamzero-trossen-lora`: 16-dim packed state/action, 3 RGB cameras,
+language-conditioned). We needed a way to answer **"how good is the fine-tuned model, and does
+better data/training actually improve the policy?"** — comparable across variants, with full
+W&B/Weave lineage from dataset → training run → checkpoint → eval.
 
-## Architecture
+**Nothing existed for this.** The reference eval (`github.com/anu-wandb/dreamzero-evals`, and the
+DROID-only `arhanjain/sim-evals` it builds on) is hard-wired to the **DROID** embodiment — Franka
+7-DOF, **8-dim** `oxe_droid` actions, 2 cameras. Our model is **16-dim bimanual** with different
+cameras, so none of it could be reused for the rollout/eval. **This whole `eval/` suite was written
+from scratch** for the Trossen embodiment — the policy server, the eval drivers, the embodiment +
+scene, and the Weave instrumentation — keeping only the *structure/conventions* of the dreamzero-evals
+Weave layer (`@weave.op run_episode`, `EvaluationLogger`, `VideoFileClip` media, the leaderboard
+convention) so results look familiar in the W&B workspace.
 
-```
-Arena policy_runner (RTX node, Isaac Sim 6.0)            DreamZero server (GH200 or RTX)
-  ├─ Trossen embodiment + scene + task   ── obs ──▶  DreamZeroRemotePolicy  ── ws ──▶  GrootSimPolicy
-  │   (mobile_ai.usd, 3 TiledCameras)                 (this repo, eval/)        :8001    (LoRA + trossen
-  └─ success predicate + metrics  ◀── 16-dim action ◀──  + Trossen adapter              transform)
-```
+Everything lives in the `wam-finetune-webinar` W&B project.
 
-The runner instantiates the policy by **dotted import path** (no Arena registry edit needed):
-`isaaclab_arena_dreamzero.policy.dreamzero_remote_policy.DreamZeroRemotePolicy`.
+## Two complementary evals (both from scratch, same Weave structure)
 
-## What's in this repo (done — `eval/`)
+### 1. Offline real-data eval — `offline_eval.py`  ✅ working, primary metric
+Replays **real held-out Trossen episodes** (the Encord LeRobot dataset) through the model and scores
+**predicted vs ground-truth actions** (`action_mse` / `action_mae` / `gripper_mae`). This evaluates on
+exactly the training data distribution → genuinely meaningful action quality, with **no sim-to-real
+gap**. It's a pure client (no GPU / no Isaac Sim) that hits the policy server.
 
-- **`isaaclab_arena_dreamzero/`** — the DreamZero policy adapter for Arena, modeled on
-  `isaaclab_arena_openpi`:
-  - `policy/dreamzero_remote_policy.py` — `DreamZeroRemotePolicy(PolicyBase)`: connects to the
-    DreamZero server with `openpi_client`'s `WebsocketClientPolicy`, does per-env open-loop chunk
-    replay, and tolerates the server's `actions` / `action` / split `action.*` response shapes.
-    Plus the `DreamZeroEmbodimentAdapter` ABC (`extract` + `pack_request`).
-  - `policy/trossen_adapter.py` — `DreamZeroTrossenAdapter`: the Trossen wire mapping
-    (`action_dim=16`; 3 RGB views + 16-dim packed `state` + prompt). Keys mirror the trained
-    `modality_config_trossen`.
-  - `policy/dreamzero_remote_config.py` — connection/runtime config dataclass.
-- **`jobs_configs/trossen_pnp_dreamzero_jobs_config.json`** — eval jobs config; `policy_*` fields are
-  complete, `environment`/`embodiment` are `TODO_` until the embodiment is authored.
+- Videos per episode (Weave `VideoFileClip`): `episode_video` = the **real** recorded 3-cam footage,
+  `dream_video` = the WAM's predicted video, `side_by_side` = real‖dream synced.
+- Latest run: mean `action_mse ≈ 0.117` over 5 tasks (coffee-pour, towels, batteries, glue) on v4.
+- Run it: scale the server to 1, then apply `deploy/trossen-offline-eval-job.yaml` (stock `python:3.11`
+  CPU job → `offline_runner.sh` → `offline_eval.py`).
 
-### Verified interface contracts (so the remaining pieces line up)
+### 2. Closed-loop sim eval — `run_trossen_eval.py` (NVIDIA Isaac Lab-Arena)  🚧 in progress
+The Trossen robot **acts in a physics sim**: Isaac Sim renders cameras → our policy → 16-dim actions →
+env steps → success metric. This is the closed-loop behavior check. We authored the full stack from
+scratch on Arena:
+- `isaaclab_arena_dreamzero/embodiments/trossen.py` — the **Trossen embodiment** (mobile_ai.usd,
+  16-dim joint-position action in the trained order, 3 cameras, 16-dim `state` obs), registered via
+  `@register_asset`.
+- `isaaclab_arena_dreamzero/environments/trossen_pick_and_place.py` — a **custom scene** with the work
+  table **raised into the tall robot's reach** (the stock Franka env puts objects ~1.2 m below the
+  Trossen arms) + objects + lighting/HDR + `PickAndPlaceTask`.
+- **Open limiter:** the model trained on **real** Trossen photos; Isaac renders synthetic assets, so
+  closed-loop *success* may stay low until the rendered scene resembles training (camera-aim + assets +
+  domain randomization — the current iteration). Treat sim success as a behavior check; the offline
+  eval is the trustworthy action-quality number.
 
+## Shared pieces (from scratch)
+- `isaaclab_arena_dreamzero/policy/` — `DreamZeroRemotePolicy` (PolicyBase) + `DreamZeroTrossenAdapter`
+  (3-cam + 16-dim wire format), modeled on Arena's `isaaclab_arena_openpi`.
+- `server/trossen_policy_server.py` — the **DreamZero Trossen inference server** (3 cams / 16-dim packed
+  action) wrapping the upstream roboarena server; packs the WAM dream video into responses
+  (`DZ_DREAM_VIDEO=1`). Deployed via `deploy/trossen-inference.yaml` (configmap + Deployment + Service).
+- `weave_eval.py` — `weave.init` **inside** `wandb.init` (same project) so traces map to the run
+  ([weave-in-workspaces](https://docs.wandb.ai/weave/guides/tools/weave-in-workspaces)) +
+  `run.use_artifact(<ckpt>)` lineage + run tags (smoke/full-scale/<steps>/offline/<version>).
+- `video_logging.py` — sim 3-cam strip + dream + synced side-by-side mp4s.
+- `debug_cameras.py` — render-only introspection (link/object world positions + camera poses + frames)
+  for calibrating the sim scene.
+
+## Verified contracts
 | Concern | Contract |
 | --- | --- |
-| Policy selection | `policy_runner.get_policy_cls()` accepts a dotted import path → no registry change |
-| Wire client | `openpi_client.websocket_client_policy.WebsocketClientPolicy` (same as the DROID eval) |
-| Server response | `(H, 16)` under `actions` / `action`; `H >= open_loop_horizon` (default 5) |
-| Trossen video keys | `video.exterior_image_1_left`, `video.wrist_image_left`, `video.wrist_image_right` |
-| Trossen state/action | packed `state.state` (16), `action.action` (16), q99-normalized server-side |
-| Arena obs groups | cameras under `camera_obs`, proprio under `policy` |
+| Wire client | `openpi_client.websocket_client_policy.WebsocketClientPolicy`; server uses the roboarena `endpoint` routing key |
+| Server response | `(H, 16)` action chunk (`actions`/`action`); `H >= open_loop_horizon` (default 5) |
+| Trossen modality | video `video.{exterior_image_1_left,wrist_image_left,wrist_image_right}`; packed `state.state`(16) / `action.action`(16), q99-normalized; images sent at 640×480 |
+| 16-dim packing | `[left_joint_0..5, left gripper, right_joint_0..5, right gripper, linear_vel, angular_vel]` |
+| Checkpoint load | `GrootSimPolicy(embodiment_tag=TROSSEN, model_path=…)`; tag + projector `trossen:32` + `trossen_relative` registered |
 
-## Remaining work (needs the cluster RTX-PRO-6000 nodes + the DreamZero server repo)
-
-1. **DreamZero server — Trossen input mapping** (server-side; lives in upstream DreamZero, not here).
-   Generalize `PolicyServerConfig` from the DROID defaults (2 cams / 8-dim) to **3 cams / 16-dim**, and
-   map the request keys this adapter sends (`observation/exterior_image_1_left`,
-   `observation/wrist_image_left`, `observation/wrist_image_right`, `observation/state`, `prompt`) onto
-   the trossen modality keys. The checkpoint loads via
-   `GrootSimPolicy(embodiment_tag=EmbodimentTag.TROSSEN, model_path=…)` — tag, projector index
-   (`trossen: 32`), and `trossen_relative` data config are already registered;
-   `load_lora`+`merge_and_unload` already handle the LoRA. **If the server's request key names differ,
-   adjust the constants in `trossen_adapter.py`** (they are the single source of truth on our side).
-2. **Trossen embodiment in Arena** — register a new Arena embodiment from `trossen_ai_isaac`'s
-   `mobile_ai.usd`: dual-arm articulation with a `JointPositionAction` (`joint_[0-5]`×2 + 2 grippers +
-   base ≈ 16-dim), a 16-dim `state` proprio term under `policy` (ordered to match training), and **3
-   `TiledCamera`s** under `camera_obs` keyed `exterior_image_1_left` / `wrist_image_left` /
-   `wrist_image_right`, posed/FoV-matched to the real cameras.
-3. **Scene + task + success predicate** — one simple bimanual pick-place (cube in bowl) with a
-   programmatic success check (grasped + placed within XY/Z thresholds), mirroring how
-   `deploy/cks/scripts/droid_weave_eval.py` scores DROID.
-4. **Metrics → Weave** — Arena ships its own metrics/video/report. Either add a thin Weave sink
-   (reuse `weave.init` / `EvaluationLogger` / `VideoFileClip` from `droid_weave_eval.py`, leaderboard
-   `dataset=trossen-sim-<task>` stable, `model=dreamzero-trossen-lora:<ver>` varying) or post-process
-   Arena's report into Weave.
-5. **Orchestration** — `eval/runner.sh` (clone Arena + trossen_ai_isaac → install deps → put
-   `eval/isaaclab_arena_dreamzero` on `PYTHONPATH` → TCP-probe the server → run policy_runner with the
-   jobs config) + k8s Job (RTX node, Isaac Sim) and the DreamZero server as a Service, on an
-   **Isaac Sim 6.0.0 + Arena (amd64)** image.
-
-## Primary caveat
-Our world-action model trained on **real** Trossen frames; Isaac renders differ → sim success can read
-~0 regardless of model quality. The first end-to-end milestone proves the **pipeline is green**, not a
-quality verdict. Mitigations: camera-pose/FoV matching, lighting/texture domain randomization, and
-reporting action-space agreement alongside task success.
+## Deploy / run
+- Server: `deploy/trossen-inference.yaml` (RTX node, v4 checkpoint, `DZ_DREAM_VIDEO=1`). Scale to 1 before any eval.
+- Offline eval: `deploy/trossen-offline-eval-job.yaml` (CPU node).
+- Sim eval: `deploy/trossen-eval-job.yaml` (Isaac Sim image, RTX node) → `runner.sh` → `run_trossen_eval.py`.
+- Sim debug render: `deploy/trossen-cam-debug-job.yaml` → `runner.sh` (`WAM_EVAL_ENTRY=debug_cameras.py`).
 
 ## Reference clones (not committed)
-`/Users/anu/Projects/IsaacLab-Arena` and `/Users/anu/Projects/trossen_ai_isaac` were cloned for API
-reference. Templates: `isaaclab_arena_openpi/policy/{pi0_remote_policy,droid_adapter}.py` (wire format)
-and `isaaclab_arena_gr00t/policy/gr00t_remote_closedloop_policy.py` (groot-family obs/action semantics).
+`/Users/anu/Projects/{IsaacLab-Arena,trossen_ai_isaac,dreamzero-upstream}` were cloned for API/asset
+reference (Arena env/embodiment patterns, `mobile_ai.usd`, the upstream roboarena server).

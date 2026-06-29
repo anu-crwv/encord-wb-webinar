@@ -32,6 +32,7 @@ spec:
             - {name: OMNI_KIT_ACCEPT_EULA, value: "YES"}
             - {name: WAM_EVAL_ENTRY, value: "debug_cameras.py"}
             - {name: WAM_SKIP_SERVER_PROBE, value: "1"}
+            - {name: WAM_TABLE_X, value: "0.20"}
             - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
             - {name: PYTHONUNBUFFERED, value: "1"}
           resources:
