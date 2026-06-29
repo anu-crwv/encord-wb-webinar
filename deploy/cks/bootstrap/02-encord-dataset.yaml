@@ -44,6 +44,11 @@ spec:
             - {name: WANDB_ENTITY,  value: encord-wb-physical-ai}
             - {name: WANDB_PROJECT, value: wam-finetune-webinar}
             - {name: WAM_DATA_ROOT, value: /data/wam}
+            # Artifacts to merge + episode cap. Defaults here target the 400-episode v2 dataset;
+            # WAM_MAX_EPISODES selectively downloads only the first N (a smoke). Empty = all 400 (34GB).
+            - {name: WAM_LABELS_ARTIFACT, value: "encord-wb-physical-ai/wam-finetune-webinar/encord-single-view-labels:v1"}
+            - {name: WAM_SOURCE_ARTIFACT, value: "encord-wb-physical-ai/wam-finetune-webinar/encord-source-data:v2"}
+            - {name: WAM_MAX_EPISODES,    value: "20"}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
           resources:
             requests: {cpu: "4", memory: 16Gi}

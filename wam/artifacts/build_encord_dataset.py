@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -45,44 +46,79 @@ LANG_KEYS = [
 ]
 
 
+def _ep_index(path: str):
+    m = re.search(r"episode_(\d+)\.(parquet|mp4)$", path)
+    return int(m.group(1)) if m else None
+
+
+def fetch(artifact, dest: str, max_eps: int | None):
+    """Download an artifact to dest. If max_eps is set, fetch only meta/* + the first max_eps
+    episodes' files (per-file via get_path) — avoids pulling the full (34GB) source-data for a smoke."""
+    if max_eps is None:
+        return artifact.download(root=dest)
+    n = 0
+    for path in artifact.manifest.entries:
+        i = _ep_index(path)
+        if "/meta/" in path or (i is not None and i < max_eps):
+            artifact.get_path(path).download(root=dest)
+            n += 1
+    print(f"[encord]   selectively fetched {n} files (<= {max_eps} episodes) from {artifact.name}")
+    return dest
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--labels-artifact", default=DEFAULT_LABELS)
-    p.add_argument("--source-artifact", default=DEFAULT_SOURCE)
+    p.add_argument("--labels-artifact", default=os.environ.get("WAM_LABELS_ARTIFACT", DEFAULT_LABELS))
+    p.add_argument("--source-artifact", default=os.environ.get("WAM_SOURCE_ARTIFACT", DEFAULT_SOURCE))
     p.add_argument("--out", default=DEFAULT_OUT)
     p.add_argument("--embodiment-tag", default="trossen")
+    p.add_argument("--max-episodes", type=int, default=int(os.environ["WAM_MAX_EPISODES"]) if os.environ.get("WAM_MAX_EPISODES") else None,
+                   help="Only merge the first N episodes (selective download). Default: all.")
     p.add_argument("--convert-script", default="scripts/data/convert_lerobot_to_gear.py")
     p.add_argument("--skip-convert", action="store_true", help="merge only; don't run the GEAR converter")
     args = p.parse_args()
+    N = args.max_episodes
 
     import wandb
     out = Path(args.out)
     if out.exists():
         shutil.rmtree(out)
-    (out / "data").mkdir(parents=True)
-    (out / "videos").mkdir(parents=True)
+    (out / "data" / "chunk-000").mkdir(parents=True)
     (out / "meta").mkdir(parents=True)
+    for k in VIDEO_KEYS:
+        (out / "videos" / "chunk-000" / f"observation.images.{k}").mkdir(parents=True)
 
     run = wandb.init(entity=os.environ.get("WANDB_ENTITY", "encord-wb-physical-ai"),
                      project=os.environ.get("WANDB_PROJECT", "wam-finetune-webinar"),
                      job_type="preprocess", name="build-encord-trossen")
-    print("[encord] downloading artifacts (records lineage)...")
-    lab = Path(run.use_artifact(args.labels_artifact).download())
-    src = Path(run.use_artifact(args.source_artifact).download())
+    print(f"[encord] downloading artifacts (records lineage); max_episodes={N}...")
+    dl = os.path.join(os.environ.get("TMPDIR", "/tmp"), "encord_dl")
+    lab = Path(fetch(run.use_artifact(args.labels_artifact), os.path.join(dl, "lab"), N))
+    src = Path(fetch(run.use_artifact(args.source_artifact), os.path.join(dl, "src"), N))
     lab_ds, src_ds = lab / "dataset", src / "dataset"
 
-    # 1. data/ + meta episodes/tasks come from the LABELS artifact.
-    shutil.copytree(lab_ds / "data", out / "data", dirs_exist_ok=True)
-    shutil.copy2(lab_ds / "meta" / "episodes.jsonl", out / "meta" / "episodes.jsonl")
-    shutil.copy2(lab_ds / "meta" / "tasks.jsonl", out / "meta" / "tasks.jsonl")
+    # Select episodes (first N, or all) from the labels episodes.jsonl.
+    all_eps = [json.loads(l) for l in open(lab_ds / "meta" / "episodes.jsonl") if l.strip()]
+    episodes = all_eps[:N] if N else all_eps
 
-    # 2. videos/ come from the SOURCE-DATA artifact (keep its cam keys as canonical).
-    shutil.copytree(src_ds / "videos", out / "videos", dirs_exist_ok=True)
+    # 1. Copy per-episode parquet (labels) + 3 videos (source-data) for the selected episodes only.
+    for e in episodes:
+        i = e["episode_index"]
+        shutil.copy2(lab_ds / f"data/chunk-000/episode_{i:06d}.parquet",
+                     out / f"data/chunk-000/episode_{i:06d}.parquet")
+        for k in VIDEO_KEYS:
+            shutil.copy2(src_ds / f"videos/chunk-000/observation.images.{k}/episode_{i:06d}.mp4",
+                         out / f"videos/chunk-000/observation.images.{k}/episode_{i:06d}.mp4")
+    # meta: episodes (selected) + tasks (full, for task_index lookups)
+    with open(out / "meta" / "episodes.jsonl", "w") as f:
+        for e in episodes:
+            f.write(json.dumps(e) + "\n")
+    shutil.copy2(lab_ds / "meta" / "tasks.jsonl", out / "meta" / "tasks.jsonl")
 
     # 3. Build a self-consistent info.json: state/action features (from labels) + the 3 video keys,
     #    correct fps/totals, DROID-style path templates.
     lab_info = json.loads((lab_ds / "meta" / "info.json").read_text())
-    episodes = [json.loads(l) for l in open(out / "meta" / "episodes.jsonl") if l.strip()]
+    feats = lab_info.get("features", {})
     feats = lab_info.get("features", {})
     info = {
         "codebase_version": "v2.0",
@@ -140,13 +176,15 @@ def main() -> None:
     mod_path.write_text(json.dumps(mod, indent=4))
     print("[encord] patched modality.json annotation ->", list(mod["annotation"].keys()))
 
-    # 7. Restore the real tasks.jsonl + episodes.jsonl from the labels artifact: the converter (run
-    #    with --force) regenerated them from the (string-less) parquet, collapsing tasks.jsonl to a
-    #    single empty task. The parquet's task_index references 0..N-1, so we need the original map.
+    # 7. Restore the real tasks.jsonl (full) + the SELECTED episodes.jsonl: the converter (run with
+    #    --force) regenerated them from the (string-less) parquet, collapsing tasks.jsonl to a single
+    #    empty task. The parquet's task_index references the full tasks table, so we keep all tasks.
     shutil.copy2(lab_ds / "meta" / "tasks.jsonl", out / "meta" / "tasks.jsonl")
-    shutil.copy2(lab_ds / "meta" / "episodes.jsonl", out / "meta" / "episodes.jsonl")
+    with open(out / "meta" / "episodes.jsonl", "w") as f:
+        for e in episodes:
+            f.write(json.dumps(e) + "\n")
     ntasks = sum(1 for l in open(out / "meta" / "tasks.jsonl") if l.strip())
-    print(f"[encord] restored tasks.jsonl ({ntasks} tasks) + episodes.jsonl from labels artifact")
+    print(f"[encord] restored tasks.jsonl ({ntasks} tasks) + {len(episodes)} episodes")
     print("[encord] modality summary: state=%s action=%s video=%s annotation=%s" % (
         list(mod["state"]), list(mod["action"]), list(mod["video"]), list(mod["annotation"])))
     run.finish()
