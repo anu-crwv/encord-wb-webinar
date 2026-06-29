@@ -12,10 +12,10 @@ the task and language annotation columns from Encord captions. It does not fabri
 export ENCORD_SSH_KEY_FILE=/path/to/encord_ssh_private_key
 ```
 
-Edit run notes:
+Edit run notes and artifact tags:
 
 ```text
-scripts/encord/label-export/export_metadata.yaml
+scripts/encord/label-export/label_export_config.yaml
 ```
 
 Edit W&B settings:
@@ -28,7 +28,7 @@ scripts/encord/wandb_config.yaml
 
 ```bash
 uv run --script scripts/encord/label-export/export_single_view_labels_to_wandb.py \
-  --metadata-yaml scripts/encord/label-export/export_metadata.yaml \
+  --metadata-yaml scripts/encord/label-export/label_export_config.yaml \
   --source-artifact-ref encord-source-data:v0 \
   --limit 3
 ```
@@ -44,6 +44,7 @@ exports/encord-label-export/<timestamp>/
 Logs:
 
 - label overlay artifact with `dataset/data/...` and `dataset/meta/...`
+- configured tags as W&B artifact tags, with the `latest` alias applied automatically
 - preview table with `language_instruction`
 
 The W&B artifact type is `dataset` because W&B artifact names cannot change type after creation, and this
@@ -52,7 +53,7 @@ overlay is materialized as a dataset fragment.
 The label overlay artifact is intended to be materialized together with the source dataset artifact:
 
 ```text
-encord-source-data:vN + encord-single-view-labels:vM => local dataset/
+encord-source-data:vN + encord-captions:vM => local dataset/
 ```
 
 The source dataset artifact provides:

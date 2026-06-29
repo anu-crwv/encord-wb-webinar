@@ -1,8 +1,0 @@
-encord_project_hash: 6b9198bb-d00f-4a7b-9498-d37b6dc79efa
-source_s3_prefix: s3://ego-data-collection-encord/raw-feed/trossen-data/
-source_dataset_note: "3 Episodes only to test training harness"
-label_version_note: "encord-captioning-agent captions; no QC."
-captioning_method: captioning-agent-v0
-qc_status: none
-curation_status: uncurated
-# source_artifact_ref: encord-source-data:v0

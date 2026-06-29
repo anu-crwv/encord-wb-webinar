@@ -17,16 +17,23 @@ Edit W&B settings:
 scripts/encord/wandb_config.yaml
 ```
 
+Edit artifact description and tags:
+
+```text
+scripts/encord/dataset-export/dataset_export_config.yaml
+```
+
 ## Run
 
 ```bash
 AWS_PROFILE=encord-robotics uv run --script scripts/encord/dataset-export/export_encord_dataset_to_wandb.py \
   --dataset-hash <encord_dataset_hash> \
-  --limit 3 \
-  --alias v0
+  --limit 3
 ```
 
 For full export, omit `--limit`.
+
+Configured tags are logged as W&B artifact tags, and the `latest` alias is applied automatically.
 
 Local output:
 
