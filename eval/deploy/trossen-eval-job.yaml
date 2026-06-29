@@ -45,6 +45,8 @@ spec:
             # W&B run tags for navigation (auto-tags add eval/trossen/<version>).
             - {name: WAM_EVAL_TAGS, value: "full-scale,3000-steps"}
             - {name: WAM_EVAL_VIDEO_DIR, value: "/data/wam/eval_videos"}
+            # Raised work-table pose calibrated via debug_cameras.py (objects reachable + cameras framed).
+            - {name: WAM_TABLE_X, value: "0.20"}
             - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
             - {name: PYTHONUNBUFFERED, value: "1"}
           resources:

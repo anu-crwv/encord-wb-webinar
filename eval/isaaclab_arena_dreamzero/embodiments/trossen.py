@@ -179,12 +179,21 @@ class TrossenCameraCfg:
         common = dict(height=480, width=640, data_types=["rgb"],
                       spawn=sim_utils.PinholeCameraCfg(focal_length=2.1, focus_distance=28.0,
                                                        horizontal_aperture=5.376, vertical_aperture=4.032))
+        # Reproduce the REAL Trossen camera frames from mobile_ai.usd (verified via
+        # usd_probe.py). The massless *_color_optical_frame prims are pruned when Arena
+        # spawns the articulation, so we parent at the real (spawned) camera LINKS and
+        # bake the optical rotation into the offset: every *_color_optical_frame sits at
+        # (-0.5,0.5,-0.5,0.5) relative to its link (ROS optical, +Z = optical axis), and
+        # cam_high_link already carries the ~37deg downward pitch. convention="ros" so
+        # the camera looks along the resulting +Z -> the exact real view; wrist cams then
+        # track their arm links for free.
+        _OPTICAL = (-0.5, 0.5, -0.5, 0.5)  # *_color_optical_frame local rot (w,x,y,z), all 3 cams
         self.exterior_image_1_left = Cam(
             prim_path="{ENV_REGEX_NS}/Robot/cam_high_link/exterior_cam",
-            offset=Off(pos=(0.0, 0.0, 0.0), rot=(0.5, -0.5, 0.5, -0.5), convention="opengl"), **common)
+            offset=Off(pos=(0.0, 0.0, 0.0), rot=_OPTICAL, convention="ros"), **common)
         self.wrist_image_left = Cam(
             prim_path="{ENV_REGEX_NS}/Robot/follower_left_camera_link/wrist_cam_left",
-            offset=Off(pos=(0.0, 0.0, 0.0), rot=(0.5, -0.5, 0.5, -0.5), convention="opengl"), **common)
+            offset=Off(pos=(0.0, 0.0, 0.0), rot=_OPTICAL, convention="ros"), **common)
         self.wrist_image_right = Cam(
             prim_path="{ENV_REGEX_NS}/Robot/follower_right_camera_link/wrist_cam_right",
-            offset=Off(pos=(0.0, 0.0, 0.0), rot=(0.5, -0.5, 0.5, -0.5), convention="opengl"), **common)
+            offset=Off(pos=(0.0, 0.0, 0.0), rot=_OPTICAL, convention="ros"), **common)
