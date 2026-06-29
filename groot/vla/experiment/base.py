@@ -488,10 +488,15 @@ class BaseTrainer(transformers.Trainer):
             state_dict = self.model.state_dict()
 
         if self.base_cfg.save_lora_only:
-            # Save only the trainable parameters
-            train_key = [k for k, v in self.model.named_parameters() if v.requires_grad]
-            lora_state_dict = {k: v for k, v in self.model.state_dict().items() if k in train_key}
-            state_dict = lora_state_dict
+            # Save only the trainable parameters. Filter the state_dict captured ABOVE
+            # (DeepSpeed: ZeRO-3-consolidated via accelerator.get_state_dict). Do NOT
+            # re-read self.model.state_dict() here: under ZeRO-3 it returns empty (0,)
+            # tensors for any param >= the partition/persistence threshold, which
+            # silently dropped the large trainable projector weight matrices
+            # (state_encoder/action_encoder/action_decoder *.W) from earlier LoRA saves.
+            train_key = {k for k, v in self.model.named_parameters() if v.requires_grad}
+            src = state_dict if state_dict is not None else self.model.state_dict()
+            state_dict = {k: v for k, v in src.items() if k in train_key}
 
         if self.args.should_save:
             ret = self.model.save_pretrained(output_dir, state_dict=state_dict)
