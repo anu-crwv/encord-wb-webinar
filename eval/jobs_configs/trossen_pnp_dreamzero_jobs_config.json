@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "Isaac Lab-Arena eval jobs config for the fine-tuned Trossen DreamZero LoRA.",
+    "Modeled on isaaclab_arena_environments/eval_jobs_configs/droid_pnp_srl_openpi_jobs_config.json.",
+    "Reuses Arena's embodiment-agnostic pick_and_place_maple_table environment (scene + task +",
+    "success predicate) with our authored 'trossen_mobile_ai' embodiment (eval/isaaclab_arena_dreamzero/",
+    "embodiments). Run via eval/run_trossen_eval.py so the embodiment + DreamZeroRemotePolicy register.",
+    "TODO(sim): confirm pick_and_place_maple_table composes with the bimanual mobile embodiment; if not,",
+    "author a Trossen-specific scene/task. Camera extrinsics + gripper mimic also need in-sim tuning."
+  ],
+  "jobs": [
+    {
+      "name": "trossen_pnp_dreamzero_cube_in_bowl",
+      "arena_env_args": {
+        "enable_cameras": true,
+        "environment": "pick_and_place_maple_table",
+        "embodiment": "trossen_mobile_ai"
+      },
+      "num_episodes": 10,
+      "language_instruction": "Pick up the cube and place it in the bowl.",
+      "policy_type": "isaaclab_arena_dreamzero.policy.dreamzero_remote_policy.DreamZeroRemotePolicy",
+      "policy_config_dict": {
+        "embodiment_adapter": "trossen",
+        "policy_device": "cuda:0",
+        "remote_host": "dreamzero-trossen-inference",
+        "remote_port": 8001,
+        "open_loop_horizon": 5
+      }
+    }
+  ]
+}

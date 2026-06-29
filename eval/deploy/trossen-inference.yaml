@@ -1,0 +1,83 @@
+# DreamZero Trossen inference server (3 cams / 16-dim) for the Isaac Lab-Arena eval.
+# Mirrors the DROID `dreamzero-inference` Deployment but runs our Trossen server
+# (eval/server/trossen_policy_server.py, shipped via the dz-trossen-server-scripts
+# ConfigMap) and prefers an RTX node OTHER than the one hosting DROID inference.
+#
+# The ConfigMap is built from the script files:
+#   kubectl -n dreamzero create configmap dz-trossen-server-scripts \
+#     --from-file=dz_trossen_server_entrypoint.sh=eval/deploy/dz_trossen_server_entrypoint.sh \
+#     --from-file=trossen_policy_server.py=eval/server/trossen_policy_server.py \
+#     --from-file=test_trossen_client.py=eval/server/test_trossen_client.py \
+#     --dry-run=client -o yaml | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dreamzero-trossen-inference
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "DZ-trossen-server"}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: dreamzero-trossen-inference}}
+  template:
+    metadata:
+      labels: {app: dreamzero-trossen-inference, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "DZ-trossen-server"}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        nvidia.com/gpu.product: NVIDIA-RTX-PRO-6000-Blackwell-Server-Edition
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector: {matchLabels: {app: dreamzero-inference}}
+      tolerations:
+        - {key: is_gpu, value: "true", operator: Equal, effect: PreferNoSchedule}
+      containers:
+        - name: dz-trossen-server
+          image: nvcr.io/nvidia/pytorch:25.04-py3
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "/scripts/dz_trossen_server_entrypoint.sh"]
+          envFrom: [{secretRef: {name: wandb-api-key}}]
+          env:
+            - {name: DZ_PORT, value: "8001"}
+            - {name: DZ_ARM64, value: "0"}
+            # Pack the WAM dream video into responses so the eval can sync it side-by-side.
+            - {name: DZ_DREAM_VIDEO, value: "1"}
+            - {name: WANDB_ENTITY, value: encord-wb-physical-ai}
+            - {name: WANDB_PROJECT, value: wam-finetune-webinar}
+            - {name: LORA_ARTIFACT, value: "encord-wb-physical-ai/wam-finetune-webinar/dreamzero-trossen-lora:v4"}
+            - {name: MODEL_DIR, value: "/checkpoints/wam/eval/dreamzero-trossen-lora-v4"}
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: TORCH_COMPILE_DISABLE, value: "1"}
+            - {name: TORCHDYNAMO_DISABLE, value: "1"}
+          ports: [{containerPort: 8001, name: ws}]
+          readinessProbe: {tcpSocket: {port: 8001}, initialDelaySeconds: 90, periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 180}
+          livenessProbe: {tcpSocket: {port: 8001}, initialDelaySeconds: 1200, periodSeconds: 60, timeoutSeconds: 10, failureThreshold: 10}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+          resources:
+            requests: {cpu: "16", memory: 192Gi, nvidia.com/gpu: "1"}
+            limits:   {cpu: "64", memory: 384Gi, nvidia.com/gpu: "1"}
+          volumeMounts:
+            - {name: scripts,     mountPath: /scripts}
+            - {name: data,        mountPath: /data}
+            - {name: checkpoints, mountPath: /checkpoints}
+            - {name: dshm,        mountPath: /dev/shm}
+      volumes:
+        - {name: scripts,     configMap: {name: dz-trossen-server-scripts, defaultMode: 0755}}
+        - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+        - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}
+        - {name: dshm,        emptyDir: {medium: Memory, sizeLimit: 64Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dreamzero-trossen-inference
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero}
+spec:
+  selector: {app: dreamzero-trossen-inference}
+  ports: [{name: ws, port: 8001, targetPort: 8001}]

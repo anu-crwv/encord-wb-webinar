@@ -1,0 +1,56 @@
+# Offline Trossen eval on REAL held-out episodes (eval/offline_eval.py).
+# Pure client (no GPU / no Isaac Sim) — runs on a CPU node, reads the LeRobot
+# dataset from the PVC, replays it through the dreamzero-trossen-inference server,
+# scores predicted-vs-GT actions, logs to Weave with real/dream/side-by-side videos.
+# Prereq: scale dreamzero-trossen-inference to replicas=1 (v4) first.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trossen-offline-eval
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 259200
+  template:
+    metadata:
+      labels: {app: trossen-offline-eval, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
+    spec:
+      restartPolicy: Never
+      # Stock python:3.11 image; run as root (baseline PSA) for a clean system pip.
+      securityContext: {runAsUser: 0, runAsGroup: 0, fsGroup: 0}
+      # CPU node (no GPU) — the model runs on the server.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: kubernetes.io/arch, operator: In, values: ["amd64"]}
+                  - {key: nvidia.com/gpu.product, operator: DoesNotExist}
+      containers:
+        - name: offline-eval
+          image: python:3.11
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "/data/src/dreamzero-wam/eval/offline_runner.sh"]
+          envFrom: [{secretRef: {name: wandb-api-key}}]
+          env:
+            - {name: DZ_HOST, value: "dreamzero-trossen-inference"}
+            - {name: DZ_PORT, value: "8001"}
+            - {name: WANDB_ENTITY, value: encord-wb-physical-ai}
+            - {name: WANDB_PROJECT, value: wam-finetune-webinar}
+            - {name: WEAVE_PROJECT, value: "wam-finetune-webinar"}
+            - {name: LORA_ARTIFACT, value: "encord-wb-physical-ai/wam-finetune-webinar/dreamzero-trossen-lora:v4"}
+            - {name: WAM_EVAL_TAGS, value: "full-scale,3000-steps,offline,real-data"}
+            - {name: WAM_EVAL_VIDEO_DIR, value: "/data/wam/eval_videos_offline"}
+            - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
+            - {name: WAM_OFFLINE_EPISODES, value: "5"}
+            - {name: WAM_OFFLINE_MAX_STEPS, value: "120"}
+            - {name: WAM_OFFLINE_STRIDE, value: "5"}
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: 32Gi}
+            limits:   {cpu: "32", memory: 96Gi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: dreamzero-data}}
