@@ -1,0 +1,40 @@
+# Isaac Sim 6.0 dev/probe pod for building the Trossen Arena eval.
+# Purposes: (1) verify the NGC Isaac Sim image pulls + GPU works on an RTX node;
+# (2) introspect mobile_ai.usd joint/link names; (3) install Arena + iterate on the
+# embodiment before wiring the headless eval Job. Sleeps so we can exec into it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: isaac-sim-dev
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "isaac-sim-dev"}
+spec:
+  restartPolicy: Never
+  securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+  nodeSelector:
+    kubernetes.io/arch: amd64
+    nvidia.com/gpu.product: NVIDIA-RTX-PRO-6000-Blackwell-Server-Edition
+  tolerations:
+    - {key: is_gpu, value: "true", operator: Equal, effect: PreferNoSchedule}
+  containers:
+    - name: isaac
+      image: nvcr.io/nvidia/isaac-sim:6.0.0-dev2
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-c", "echo isaac-sim-dev up; sleep infinity"]
+      env:
+        # Keep all Isaac Sim / Kit / pip caches on the writable PVC (uid 1000, no root).
+        - {name: HOME, value: /data/.home-isaac}
+        - {name: OMNI_KIT_ALLOW_ROOT, value: "0"}
+        - {name: PYTHONUNBUFFERED, value: "1"}
+      securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+      resources:
+        requests: {cpu: "8", memory: 48Gi, nvidia.com/gpu: "1"}
+        limits:   {cpu: "32", memory: 128Gi, nvidia.com/gpu: "1"}
+      volumeMounts:
+        - {name: data,        mountPath: /data}
+        - {name: checkpoints, mountPath: /checkpoints}
+        - {name: dshm,        mountPath: /dev/shm}
+  volumes:
+    - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+    - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}
+    - {name: dshm,        emptyDir: {medium: Memory, sizeLimit: 32Gi}}

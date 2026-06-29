@@ -137,9 +137,17 @@ def primary_prepare():
     os.makedirs(os.path.dirname(READY_FLAG), exist_ok=True)
     if os.path.exists(READY_FLAG):
         os.remove(READY_FLAG)
+    # W&B run tags for easy navigation in the workspace (smoke vs full-scale, step
+    # count, embodiment, arch). Extra tags via WAM_TRAIN_TAGS (comma-separated).
+    _emb = DATA_CONFIG.split("/")[-1].replace("_relative", "").replace("_", "-")
+    tags = sorted(
+        {"train", ARCH, f"{MAX_STEPS}-steps", "full-scale" if int(MAX_STEPS) >= 1000 else "smoke", _emb}
+        | {t.strip() for t in os.environ.get("WAM_TRAIN_TAGS", "").split(",") if t.strip()}
+    )
     run = wandb.init(
         entity=ENTITY, project=PROJECT, id=RUN_ID, job_type="train", name=Path(OUTPUT_DIR).name,
         settings=wandb.Settings(mode="shared", x_primary=True, x_label="launcher-node0"),
+        tags=tags,
         config=dict(arch=ARCH, max_steps=int(MAX_STEPS), nnodes=NNODES, num_gpus=int(NUM_GPUS),
                     per_device_batch_size=int(PER_DEV_BS), learning_rate=LEARNING_RATE,
                     deepspeed=DEEPSPEED, use_agibot_init=USE_AGIBOT_INIT, data_config=DATA_CONFIG,
