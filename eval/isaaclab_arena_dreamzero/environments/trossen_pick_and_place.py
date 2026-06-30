@@ -40,6 +40,17 @@ _TABLE_X = float(os.environ.get("WAM_TABLE_X", "0.42"))
 _TABLE_Y = float(os.environ.get("WAM_TABLE_Y", "0.0"))
 _TABLE_Z = float(os.environ.get("WAM_TABLE_Z", "0.74"))
 
+# Explicit object placement (world coords) so the cube + bowl land CLOSE and centered
+# in front of the robot -- within the arms' grasp and clearly in the exterior camera --
+# instead of the On() solver scattering them across the whole table top. The default
+# table sits at WAM_TABLE_X=0.20 (surface ~z0.78); these put the cube just in front and
+# slightly to one side, the bowl to the other side. Tunable via env for fast iteration.
+_CUBE_X = float(os.environ.get("WAM_CUBE_X", "0.38"))
+_CUBE_Y = float(os.environ.get("WAM_CUBE_Y", "0.08"))
+_BOWL_X = float(os.environ.get("WAM_BOWL_X", "0.46"))
+_BOWL_Y = float(os.environ.get("WAM_BOWL_Y", "-0.18"))
+_OBJ_Z = float(os.environ.get("WAM_OBJ_Z", "0.79"))  # just above the table surface
+
 
 @register_asset
 class TrossenWorkTable(LibraryBackground):
@@ -69,11 +80,17 @@ class TrossenPickAndPlaceEnvironment(ExampleEnvironmentBase):
         from isaaclab_arena.scene.scene import Scene
         from isaaclab_arena.tasks.pick_and_place_task import PickAndPlaceTask
 
-        # Raised work table + objects on its surface (placed by the On() solver).
+        # Raised work table. The cube + bowl are pinned to explicit, close, reachable
+        # spots (set_initial_pose) directly in front of the robot -- NOT scattered by the
+        # On() solver -- so the cube is always graspable and centered in the camera.
         background = self.asset_registry.get_asset_by_name("trossen_work_table")()
         pick_up_object = self.asset_registry.get_asset_by_name(args_cli.pick_up_object)()
         destination_location = self.asset_registry.get_asset_by_name(args_cli.destination_location)()
 
+        pick_up_object.set_initial_pose(Pose(position_xyz=(_CUBE_X, _CUBE_Y, _OBJ_Z)))
+        destination_location.set_initial_pose(Pose(position_xyz=(_BOWL_X, _BOWL_Y, _OBJ_Z)))
+
+        # Table anchor kept so any extra clutter objects can still be placed via On().
         table_reference = ObjectReference(
             name="table",
             prim_path="{ENV_REGEX_NS}/trossen_work_table/table",
@@ -81,8 +98,6 @@ class TrossenPickAndPlaceEnvironment(ExampleEnvironmentBase):
             object_type=ObjectType.RIGID,
         )
         table_reference.add_relation(IsAnchor())
-        pick_up_object.add_relation(On(table_reference))
-        destination_location.add_relation(On(table_reference))
 
         additional_table_objects = [
             self.asset_registry.get_asset_by_name(name)() for name in args_cli.additional_table_objects
