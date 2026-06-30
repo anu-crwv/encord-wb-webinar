@@ -43,6 +43,62 @@ _ENV = None
 _POLICY = None
 _PREV_SUCCESSES = 0.0
 
+# Indoor HDR maps to cycle through for domain randomization (narrows the sim-to-real
+# visual gap by varying the background + ambient light each episode).
+_HDR_POOL = [
+    "home_office_robolab", "wooden_lounge_robolab", "brown_photostudio_robolab",
+    "photo_studio_robolab", "kiara_interior_robolab", "garage_robolab",
+    "billiard_hall_robolab", "carpentry_shop_robolab",
+]
+
+
+def _domain_randomize(env, episode_idx: int):
+    """Per-episode domain randomization (gated by WAM_DOMAIN_RAND): vary the dome-light
+    intensity + color and swap the HDR background each episode so the rendered scene
+    isn't a single fixed synthetic look. The env is built once for all episodes, so the
+    build-time HDR/light variations can't re-sample -- we drive it directly here, in the
+    same per-episode hook as the rest-pose seed. Returns a refreshed observation or None."""
+    if not os.environ.get("WAM_DOMAIN_RAND"):
+        return None
+    try:
+        import random
+
+        import omni.usd
+        from pxr import Gf, UsdLux
+
+        from isaaclab_arena.assets.registries import HDRImageRegistry
+
+        rng = random.Random(4242 + episode_idx)
+        stage = omni.usd.get_context().get_stage()
+
+        # Resolve an HDR texture for this episode (best-effort).
+        hdr_name = _HDR_POOL[episode_idx % len(_HDR_POOL)]
+        tex = None
+        try:
+            tex = HDRImageRegistry().get_hdr_by_name(hdr_name)().texture_file
+        except Exception:  # noqa: BLE001
+            pass
+
+        intensity = rng.uniform(500.0, 1500.0)
+        warm, cool = rng.uniform(0.92, 1.0), rng.uniform(0.90, 1.0)
+        n = 0
+        for p in stage.Traverse():
+            if p.GetTypeName() == "DomeLight":
+                L = UsdLux.DomeLight(p)
+                L.GetIntensityAttr().Set(intensity)
+                L.GetColorAttr().Set(Gf.Vec3f(1.0, warm, cool * 0.97))
+                if tex:
+                    L.GetTextureFileAttr().Set(tex)
+                n += 1
+        for _ in range(3):
+            env.unwrapped.sim.step(render=True)
+            env.unwrapped.scene.update(env.unwrapped.physics_dt)
+        print(f"[run_trossen_eval] DR ep{episode_idx}: hdr={hdr_name} intensity={intensity:.0f} lights={n}", flush=True)
+        return env.unwrapped.observation_manager.compute()
+    except Exception as e:  # noqa: BLE001
+        print(f"[run_trossen_eval] domain randomization failed: {e}", flush=True)
+        return None
+
 
 def _clip(path):
     try:
@@ -112,6 +168,9 @@ def run_episode(episode_idx: int, instruction: str, max_steps: int) -> dict:
     policy.reset()  # clears action cache + video buffers
     obs, _ = env.reset()
     obs = _seed_rest_pose(env, obs)  # start at the real rest pose (see helper)
+    dr_obs = _domain_randomize(env, episode_idx)  # per-episode DR (gated by WAM_DOMAIN_RAND)
+    if dr_obs is not None:
+        obs = dr_obs
 
     steps_done = 0
     for t in range(max_steps):

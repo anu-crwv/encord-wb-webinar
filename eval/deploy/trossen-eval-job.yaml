@@ -43,8 +43,11 @@ spec:
             # the server's LORA_ARTIFACT (bump to :v4 once the 3000-step run finishes).
             - {name: LORA_ARTIFACT, value: "encord-wb-physical-ai/wam-finetune-webinar/dreamzero-trossen-lora:v4"}
             # W&B run tags for navigation (auto-tags add eval/trossen/<version>).
-            - {name: WAM_EVAL_TAGS, value: "full-scale,3000-steps"}
+            - {name: WAM_EVAL_TAGS, value: "full-scale,3000-steps,domain-rand"}
             - {name: WAM_EVAL_VIDEO_DIR, value: "/data/wam/eval_videos"}
+            # Per-episode domain randomization (light intensity/color + HDR background swap)
+            # to probe whether varying the synthetic look helps the real-data model engage.
+            - {name: WAM_DOMAIN_RAND, value: "1"}
             # Raised work-table pose calibrated via debug_cameras.py (objects reachable + cameras framed).
             - {name: WAM_TABLE_X, value: "0.20"}
             - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
