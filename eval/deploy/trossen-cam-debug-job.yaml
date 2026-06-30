@@ -32,7 +32,16 @@ spec:
             - {name: OMNI_KIT_ACCEPT_EULA, value: "YES"}
             - {name: WAM_EVAL_ENTRY, value: "debug_cameras.py"}
             - {name: WAM_SKIP_SERVER_PROBE, value: "1"}
+            # Raise the workspace into the arm's actual working height (rest-pose gripper
+            # ~z1.32) so the wrist cams see the objects like the real data, instead of a
+            # low table the cams overshoot. Objects sit ~0.25m below the rest-pose gripper.
             - {name: WAM_TABLE_X, value: "0.20"}
+            - {name: WAM_TABLE_Z, value: "0.96"}
+            - {name: WAM_CUBE_X, value: "0.70"}
+            - {name: WAM_CUBE_Y, value: "0.10"}
+            - {name: WAM_BOWL_X, value: "0.70"}
+            - {name: WAM_BOWL_Y, value: "-0.16"}
+            - {name: WAM_OBJ_Z, value: "1.06"}
             - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
             - {name: PYTHONUNBUFFERED, value: "1"}
           resources:
