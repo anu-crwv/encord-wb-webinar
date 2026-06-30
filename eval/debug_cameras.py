@@ -64,6 +64,33 @@ def main() -> None:
         obs, _ = env.reset()  # 2nd cycle so materials/render settle
         u = env.unwrapped
 
+        # Seed the REAL Trossen rest pose (matches the eval's start) so the dump reflects
+        # what the cameras actually see at episode start, then re-render + recompute obs.
+        try:
+            import torch
+
+            from isaaclab_arena_dreamzero.embodiments.trossen import _REST_JOINT_POS
+
+            def _tt(x):
+                return x if isinstance(x, torch.Tensor) else __import__("warp").to_torch(x)
+
+            robot = u.scene["robot"]
+            names = list(robot.joint_names)
+            jp = _tt(robot.data.joint_pos).clone()
+            for nm, val in _REST_JOINT_POS.items():
+                if nm in names:
+                    jp[:, names.index(nm)] = float(val)
+            robot.write_joint_state_to_sim(jp, torch.zeros_like(jp))
+            robot.set_joint_position_target(jp)
+            robot.write_data_to_sim()
+            for _ in range(4):
+                u.sim.step(render=True)
+                u.scene.update(u.physics_dt)
+            obs = u.observation_manager.compute()
+            print("[debug] seeded rest pose for dump", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print("[debug] rest-pose seed err:", e, flush=True)
+
         print("\n===== SCENE KEYS =====", flush=True)
         try:
             print(list(u.scene.keys()), flush=True)
@@ -81,6 +108,33 @@ def main() -> None:
                     print(f"    {nm:36s} = {jp[i]:+.3f}", flush=True)
         except Exception as e:
             print("  joints err:", e, flush=True)
+
+        print("\n===== CAMERA-LINK FORWARD (+X world = optical axis) + table-plane hit =====", flush=True)
+        try:
+            robot = u.scene["robot"]
+            bn = list(robot.body_names)
+            bq = _to_np(robot.data.body_quat_w)[0]  # (num_bodies, 4) wxyz
+            bp = _to_np(robot.data.body_pos_w)[0]
+
+            def _xaxis(q):  # +X axis of a (w,x,y,z) quat in world
+                w, x, y, z = q
+                return np.array([1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)])
+
+            for lk, label in [("cam_high_link", "exterior"),
+                              ("follower_left_camera_link", "wrist_left"),
+                              ("follower_right_camera_link", "wrist_right")]:
+                if lk in bn:
+                    i = bn.index(lk)
+                    q, p = bq[i], bp[i]
+                    f = _xaxis(q)  # camera optical forward = camera_link +X
+                    print(f"  {label:11s} pos=({p[0]:+.2f},{p[1]:+.2f},{p[2]:+.2f}) fwd=({f[0]:+.2f},{f[1]:+.2f},{f[2]:+.2f})", flush=True)
+                    for zp in (1.0, 1.06):
+                        if abs(f[2]) > 1e-3:
+                            t = (zp - p[2]) / f[2]
+                            if t > 0:
+                                print(f"      -> looks at z={zp}: (x={p[0]+t*f[0]:+.2f}, y={p[1]+t*f[1]:+.2f})", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print("  cam-link fwd err:", e, flush=True)
 
         print("\n===== ROBOT LINKS (name -> world xyz) =====", flush=True)
         try:
@@ -126,6 +180,13 @@ def main() -> None:
                 print(f"  {cname:24s} pos=({p[0]:+.2f},{p[1]:+.2f},{p[2]:+.2f}) "
                       f"quat_wxyz=({q[0]:+.3f},{q[1]:+.3f},{q[2]:+.3f},{q[3]:+.3f}) "
                       f"fwd=({f[0]:+.2f},{f[1]:+.2f},{f[2]:+.2f})", flush=True)
+                # where the camera's forward ray hits the table surface plane (z=0.78)
+                if abs(f[2]) > 1e-3:
+                    t = (0.78 - p[2]) / f[2]
+                    if t > 0:
+                        print(f"      -> ray hits table (z=0.78) at (x={p[0]+t*f[0]:+.2f}, y={p[1]+t*f[1]:+.2f})", flush=True)
+                    else:
+                        print("      -> ray points AWAY from table (no down-hit)", flush=True)
             except Exception as e:
                 print(f"  {cname}: pose err {e}", flush=True)
 

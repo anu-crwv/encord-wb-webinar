@@ -36,9 +36,12 @@ if TYPE_CHECKING:
 # Table pose (front of robot + raised into the arm workspace). Overridable via env
 # while iterating with the debug render. Defaults: in front (x), centered (y),
 # raised so the surface lands ~0.78 m (Trossen grippers reach ~0.5-0.9 m down/forward).
-_TABLE_X = float(os.environ.get("WAM_TABLE_X", "0.42"))
+_TABLE_X = float(os.environ.get("WAM_TABLE_X", "0.20"))
 _TABLE_Y = float(os.environ.get("WAM_TABLE_Y", "0.0"))
-_TABLE_Z = float(os.environ.get("WAM_TABLE_Z", "0.74"))
+# Raised to the arm's actual working height (rest-pose gripper ~z1.32): the exterior
+# camera then frames the table + objects like the real Encord dataset (vs a low table
+# the camera barely catches). Verified against the real first-frame exterior image.
+_TABLE_Z = float(os.environ.get("WAM_TABLE_Z", "0.96"))
 
 # Explicit object placement (world coords) so the cube + bowl land CLOSE and centered
 # in front of the robot -- within the arms' grasp and clearly in the exterior camera --
@@ -47,11 +50,11 @@ _TABLE_Z = float(os.environ.get("WAM_TABLE_Z", "0.74"))
 # that (x>=~0.45) or they spawn past the front edge and drop to the floor. The cube sits
 # right at the grippers' reach (x~0.50) and slightly left; the bowl to the right.
 # Tunable via env for fast iteration.
-_CUBE_X = float(os.environ.get("WAM_CUBE_X", "0.50"))
-_CUBE_Y = float(os.environ.get("WAM_CUBE_Y", "0.12"))
-_BOWL_X = float(os.environ.get("WAM_BOWL_X", "0.46"))
-_BOWL_Y = float(os.environ.get("WAM_BOWL_Y", "-0.18"))
-_OBJ_Z = float(os.environ.get("WAM_OBJ_Z", "0.80"))  # just above the table surface (~0.756 top)
+_CUBE_X = float(os.environ.get("WAM_CUBE_X", "0.70"))
+_CUBE_Y = float(os.environ.get("WAM_CUBE_Y", "0.10"))
+_BOWL_X = float(os.environ.get("WAM_BOWL_X", "0.70"))
+_BOWL_Y = float(os.environ.get("WAM_BOWL_Y", "-0.16"))
+_OBJ_Z = float(os.environ.get("WAM_OBJ_Z", "1.06"))  # just above the raised table surface (~z1.0)
 
 
 @register_asset
