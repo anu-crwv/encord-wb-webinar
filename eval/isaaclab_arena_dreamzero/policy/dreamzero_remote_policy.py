@@ -215,18 +215,26 @@ class DreamZeroRemotePolicy(PolicyBase):
 
         if os.environ.get("WAM_DEBUG_ACTIONS"):
             self._dbg_step = getattr(self, "_dbg_step", 0)
-            if self._dbg_step % 20 == 0:
+            if self._dbg_step == 0:
+                # Lazy-load the real-data per-dim state distribution [min,p1,p99,max,mean].
+                self._real_stats = None
                 try:
-                    jp = env.unwrapped.scene["robot"].data.joint_pos[0].detach().cpu().numpy()
-                    jn = list(env.unwrapped.scene["robot"].joint_names)
-                except Exception:
-                    jp, jn = None, None
+                    self._real_stats = np.load(os.path.join(
+                        os.environ.get("WAM_EVAL_SRC", "."), "real_state_stats.npy"))
+                except Exception as e:  # noqa: BLE001
+                    print(f"[ACTDBG] real_state_stats load failed: {e}", flush=True)
+                self._labels = ["Lj0", "Lj1", "Lj2", "Lj3", "Lj4", "Lj5", "Lgrip",
+                                "Rj0", "Rj1", "Rj2", "Rj3", "Rj4", "Rj5", "Rgrip", "linv", "angv"]
+            if self._dbg_step % 10 == 0:
                 ex = self._adapter.extract(observation, 0)
-                print(f"[ACTDBG s={self._dbg_step}] target(16)={np.round(batch[0], 3).tolist()}", flush=True)
-                print(f"[ACTDBG s={self._dbg_step}] state_sent(16)={np.round(np.asarray(ex.state, dtype=float), 3).tolist()}", flush=True)
-                if jp is not None:
-                    print(f"[ACTDBG s={self._dbg_step}] joint_names={jn}", flush=True)
-                    print(f"[ACTDBG s={self._dbg_step}] joint_pos={np.round(jp, 3).tolist()}", flush=True)
+                st = np.asarray(ex.state, dtype=float)
+                print(f"[ACTDBG s={self._dbg_step}] state_sent(16)={np.round(st, 3).tolist()}", flush=True)
+                # Flag any state dim outside the real [p1, p99] band -> out-of-distribution.
+                if getattr(self, "_real_stats", None) is not None and st.shape[0] == self._real_stats.shape[1]:
+                    p1, p99 = self._real_stats[1], self._real_stats[2]
+                    ood = [f"{self._labels[i]}={st[i]:+.3f}(real[{p1[i]:+.2f},{p99[i]:+.2f}])"
+                           for i in range(len(st)) if st[i] < p1[i] - 0.05 or st[i] > p99[i] + 0.05]
+                    print(f"[ACTDBG s={self._dbg_step}] OOD dims: {ood if ood else 'NONE (all in real range)'}", flush=True)
             self._dbg_step += 1
 
         return torch.from_numpy(batch).to(dtype=torch.float32, device=self.device)
