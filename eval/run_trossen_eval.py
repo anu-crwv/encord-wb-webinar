@@ -64,6 +64,42 @@ def _metrics_plain() -> dict:
     return {}
 
 
+def _seed_rest_pose(env, obs):
+    """Force the arms to the REAL Trossen rest pose after reset, and return a refreshed
+    observation. Arena's reset writes the joint *state* from init_state but leaves the
+    joint position *targets* at 0, so the stiff actuators yank the arms straight to
+    all-zeros before the policy acts -> the model's first action is computed from an
+    out-of-distribution proprio it never saw in training. Here we write both the joint
+    state AND the position target to the rest pose, then recompute the observation so
+    the policy starts in-distribution."""
+    try:
+        import torch
+
+        from isaaclab_arena_dreamzero.embodiments.trossen import _REST_JOINT_POS
+
+        def _as_torch(x):
+            if isinstance(x, torch.Tensor):
+                return x
+            import warp as wp
+
+            return wp.to_torch(x)
+
+        robot = env.unwrapped.scene["robot"]
+        names = list(robot.joint_names)
+        jp = _as_torch(robot.data.joint_pos).clone()
+        for nm, val in _REST_JOINT_POS.items():
+            if nm in names:
+                jp[:, names.index(nm)] = float(val)
+        robot.write_joint_state_to_sim(jp, torch.zeros_like(jp))
+        robot.set_joint_position_target(jp)
+        robot.write_data_to_sim()
+        fresh = env.unwrapped.observation_manager.compute()
+        return fresh if isinstance(fresh, dict) and fresh else obs
+    except Exception as e:  # noqa: BLE001
+        print(f"[run_trossen_eval] rest-pose seed failed: {e}", flush=True)
+        return obs
+
+
 @weave.op(name="run_episode")
 def run_episode(episode_idx: int, instruction: str, max_steps: int) -> dict:
     """One Trossen rollout on the Arena env. Returns a Weave-renderable summary
@@ -75,6 +111,7 @@ def run_episode(episode_idx: int, instruction: str, max_steps: int) -> dict:
     policy.set_task_description(instruction)
     policy.reset()  # clears action cache + video buffers
     obs, _ = env.reset()
+    obs = _seed_rest_pose(env, obs)  # start at the real rest pose (see helper)
 
     steps_done = 0
     for t in range(max_steps):

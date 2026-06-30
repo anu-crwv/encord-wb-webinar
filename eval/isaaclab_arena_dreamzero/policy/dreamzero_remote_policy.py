@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import argparse
 import gymnasium as gym
+import os
+
 import numpy as np
 import torch
 from abc import ABC, abstractmethod
@@ -210,6 +212,23 @@ class DreamZeroRemotePolicy(PolicyBase):
                 self._record_video_step(observation, chunk_index=self._next_chunk_steps[0] - 1)
 
         batch = np.stack(actions)  # (num_envs, action_dim)
+
+        if os.environ.get("WAM_DEBUG_ACTIONS"):
+            self._dbg_step = getattr(self, "_dbg_step", 0)
+            if self._dbg_step % 20 == 0:
+                try:
+                    jp = env.unwrapped.scene["robot"].data.joint_pos[0].detach().cpu().numpy()
+                    jn = list(env.unwrapped.scene["robot"].joint_names)
+                except Exception:
+                    jp, jn = None, None
+                ex = self._adapter.extract(observation, 0)
+                print(f"[ACTDBG s={self._dbg_step}] target(16)={np.round(batch[0], 3).tolist()}", flush=True)
+                print(f"[ACTDBG s={self._dbg_step}] state_sent(16)={np.round(np.asarray(ex.state, dtype=float), 3).tolist()}", flush=True)
+                if jp is not None:
+                    print(f"[ACTDBG s={self._dbg_step}] joint_names={jn}", flush=True)
+                    print(f"[ACTDBG s={self._dbg_step}] joint_pos={np.round(jp, 3).tolist()}", flush=True)
+            self._dbg_step += 1
+
         return torch.from_numpy(batch).to(dtype=torch.float32, device=self.device)
 
     def _record_video_step(self, observation: dict[str, Any], chunk_index: int) -> None:

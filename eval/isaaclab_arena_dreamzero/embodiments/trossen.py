@@ -58,6 +58,20 @@ _RIGHT_ARM = [f"follower_right_joint_{i}" for i in range(6)]
 _LEFT_GRIP = "follower_left_left_carriage_joint"
 _RIGHT_GRIP = "follower_right_left_carriage_joint"
 
+# Real Trossen rest/start pose, read from the Encord LeRobot dataset (episode first
+# frame; the first action just holds it). Both 6-DOF arms start BENT ("ready"):
+# joint_0..5 = [0, 1.047, 0.523, 0.628, 0, 0]. The sim previously spawned at all-zeros
+# (arms bolt-straight), which is out-of-distribution for the model -> it computed its
+# first actions from a proprio state it never saw in training, corrupting the start of
+# every rollout. Spawn at the real rest pose so the model starts in-distribution.
+_REST_ARM = [0.0, 1.047, 0.523, 0.628, 0.0, 0.0]  # per arm, joint_0..5
+_REST_JOINT_POS = {
+    **{jn: _REST_ARM[i] for i, jn in enumerate(_LEFT_ARM)},
+    **{jn: _REST_ARM[i] for i, jn in enumerate(_RIGHT_ARM)},
+    _LEFT_GRIP: 0.0,
+    _RIGHT_GRIP: 0.0,
+}
+
 
 @register_asset
 class TrossenMobileAIEmbodiment(EmbodimentBase):
@@ -81,8 +95,12 @@ class TrossenMobileAIEmbodiment(EmbodimentBase):
         self.camera_config = TrossenCameraCfg()
         self.observation_config = TrossenObservationsCfg()
         self.event_config = None
+        # Seed the arms at the real Trossen rest pose via Arena's setter (it updates
+        # scene_config.robot.init_state.joint_pos, which the reset actually honors).
         if initial_joint_pose is not None:
             self.set_joint_initial_pos(dict(zip(_LEFT_ARM + _RIGHT_ARM, initial_joint_pose)))
+        else:
+            self.set_joint_initial_pos(dict(_REST_JOINT_POS))
 
 
 @configclass
@@ -108,7 +126,7 @@ class TrossenSceneCfg:
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(0, 0, 0),
             rot=(0, 0, 0, 1),
-            joint_pos={jn: 0.0 for jn in (_LEFT_ARM + _RIGHT_ARM + [_LEFT_GRIP, _RIGHT_GRIP])},
+            joint_pos=dict(_REST_JOINT_POS),
         ),
         soft_joint_pos_limit_factor=1.0,
         actuators={

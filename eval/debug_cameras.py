@@ -70,6 +70,18 @@ def main() -> None:
         except Exception as e:
             print("scene.keys err:", e, flush=True)
 
+        print("\n===== JOINTS (post-reset) =====", flush=True)
+        try:
+            robot = u.scene["robot"]
+            jn = list(robot.joint_names)
+            jp = _to_np(robot.data.joint_pos)[0]
+            print("  cfg.init_state.joint_pos:", dict(robot.cfg.init_state.joint_pos), flush=True)
+            for i, nm in enumerate(jn):
+                if i < jp.shape[0]:
+                    print(f"    {nm:36s} = {jp[i]:+.3f}", flush=True)
+        except Exception as e:
+            print("  joints err:", e, flush=True)
+
         print("\n===== ROBOT LINKS (name -> world xyz) =====", flush=True)
         try:
             robot = u.scene["robot"]
