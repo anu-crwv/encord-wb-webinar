@@ -42,14 +42,16 @@ _TABLE_Z = float(os.environ.get("WAM_TABLE_Z", "0.74"))
 
 # Explicit object placement (world coords) so the cube + bowl land CLOSE and centered
 # in front of the robot -- within the arms' grasp and clearly in the exterior camera --
-# instead of the On() solver scattering them across the whole table top. The default
-# table sits at WAM_TABLE_X=0.20 (surface ~z0.78); these put the cube just in front and
-# slightly to one side, the bowl to the other side. Tunable via env for fast iteration.
-_CUBE_X = float(os.environ.get("WAM_CUBE_X", "0.38"))
-_CUBE_Y = float(os.environ.get("WAM_CUBE_Y", "0.08"))
+# instead of the On() solver scattering them across the whole table top. The table's
+# usable top spans world x ~0.44..0.90 at WAM_TABLE_X=0.20; both objects MUST sit inside
+# that (x>=~0.45) or they spawn past the front edge and drop to the floor. The cube sits
+# right at the grippers' reach (x~0.50) and slightly left; the bowl to the right.
+# Tunable via env for fast iteration.
+_CUBE_X = float(os.environ.get("WAM_CUBE_X", "0.50"))
+_CUBE_Y = float(os.environ.get("WAM_CUBE_Y", "0.12"))
 _BOWL_X = float(os.environ.get("WAM_BOWL_X", "0.46"))
 _BOWL_Y = float(os.environ.get("WAM_BOWL_Y", "-0.18"))
-_OBJ_Z = float(os.environ.get("WAM_OBJ_Z", "0.79"))  # just above the table surface
+_OBJ_Z = float(os.environ.get("WAM_OBJ_Z", "0.80"))  # just above the table surface (~0.756 top)
 
 
 @register_asset
