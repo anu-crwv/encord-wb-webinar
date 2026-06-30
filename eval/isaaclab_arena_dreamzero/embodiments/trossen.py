@@ -97,6 +97,12 @@ class TrossenSceneCfg:
                 enabled_self_collisions=False,
                 solver_position_iteration_count=64,
                 solver_velocity_iteration_count=0,
+                # Anchor the mobile base for this tabletop eval. The base action is already
+                # frozen (scale=0), but the base is a FREE root, so arm reaction forces
+                # (the domain-gapped policy flails the arms) were drifting/rotating the whole
+                # robot -- the camera wandered off the table and knocked the cube off. Fixing
+                # the root keeps the robot planted so the workspace stays framed.
+                fix_root_link=True,
             ),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
