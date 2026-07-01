@@ -177,9 +177,15 @@ class WANPolicyHead(ActionHead):
         self.scheduler = FlowMatchScheduler(shift=5, sigma_min=0.0, extra_one_step=True)
         self.model_names = ['text_encoder']
 
-        self.num_inference_steps = 16 
+        self.num_inference_steps = 16
         self.seed = 1140
         self.cfg_scale = 5.0
+        # Classifier-free guidance for the ACTION branch. Previously the action used only
+        # the conditional prediction (effectively CFG=1.0) while the video used cfg_scale,
+        # so on out-of-distribution (e.g. sim-rendered) frames the un-guided action
+        # regressed toward the conditional mean (rest pose / tiny motions) even when the
+        # dream stayed correct. Guide the action like the video; tunable via env.
+        self.action_cfg_scale = float(os.getenv("DZ_ACTION_CFG_SCALE", str(self.cfg_scale)))
         self.denoising_strength = 1.0
         self.sigma_shift = 5.0
         self.kv_cache1: KVCacheType | None = None
@@ -1275,14 +1281,20 @@ class WANPolicyHead(ActionHead):
                 flow_pred_uncond, flow_pred_uncond_action = predictions[1]
 
                 flow_pred = flow_pred_uncond + self.cfg_scale * (flow_pred_cond - flow_pred_uncond)
-                prev_predictions.append((current_timestep, flow_pred, flow_pred_cond_action))
+                # Guide the action the same way as the video. Previously the action used
+                # flow_pred_cond_action alone (no CFG) -> on OOD frames it collapsed toward
+                # the conditional mean. self.action_cfg_scale defaults to cfg_scale.
+                flow_pred_action = flow_pred_uncond_action + self.action_cfg_scale * (
+                    flow_pred_cond_action - flow_pred_uncond_action
+                )
+                prev_predictions.append((current_timestep, flow_pred, flow_pred_action))
                 max_cache_size = 2
                 if len(prev_predictions) > max_cache_size:
                     prev_predictions.pop(0)
 
             else:
                 assert len(prev_predictions) > 0, "prev_predictions must be set when skipping"
-                _, flow_pred, flow_pred_cond_action = prev_predictions[-1]
+                _, flow_pred, flow_pred_action = prev_predictions[-1]
 
             end_diffusion_events[index].record()
 
@@ -1297,7 +1309,7 @@ class WANPolicyHead(ActionHead):
             
             # Action: always fully denoises with standard schedule (1000->0)
             noisy_input_action = sample_scheduler_action.step(
-                model_output=flow_pred_cond_action,
+                model_output=flow_pred_action,
                 timestep=action_timestep,
                 sample=noisy_input_action,
                 step_index=index,
