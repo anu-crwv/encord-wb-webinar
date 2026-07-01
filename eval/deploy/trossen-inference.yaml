@@ -47,6 +47,9 @@ spec:
             - {name: DZ_ARM64, value: "0"}
             # Pack the WAM dream video into responses so the eval can sync it side-by-side.
             - {name: DZ_DREAM_VIDEO, value: "1"}
+            # Classifier-free guidance on the ACTION branch (was cond-only -> mean-collapse
+            # on sim frames). Match the video guidance; tune down if actions overshoot.
+            - {name: DZ_ACTION_CFG_SCALE, value: "5.0"}
             - {name: WANDB_ENTITY, value: encord-wb-physical-ai}
             - {name: WANDB_PROJECT, value: wam-finetune-webinar}
             - {name: LORA_ARTIFACT, value: "encord-wb-physical-ai/wam-finetune-webinar/dreamzero-trossen-lora:v4"}
