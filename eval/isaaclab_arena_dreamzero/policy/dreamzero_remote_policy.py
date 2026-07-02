@@ -115,6 +115,12 @@ class DreamZeroRemotePolicy(PolicyBase):
         self._next_chunk_steps: list[int] | None = None
         self.task_description: str | None = None
 
+        # Session id so the server resets its autoregressive frame buffers between episodes
+        # (the roboarena server resets on session_id change). The offline eval sends this;
+        # the sim client previously did not, so server state could persist across episodes.
+        self._session_counter = 0
+        self._session_id = f"trossen-sim-{os.getpid()}-0"
+
         # Per-episode video (sim 3-cam strip + WAM dream, synced side-by-side) -> Weave.
         self._last_dream_frames: list = []
         self._video = None
@@ -261,8 +267,12 @@ class DreamZeroRemotePolicy(PolicyBase):
             print(f"[DreamZeroRemotePolicy] video record_step skipped: {e}", flush=True)
 
     def reset(self, env_ids: torch.Tensor | None = None) -> None:
-        # Episode boundary: clear the per-episode video frame buffers. The eval
-        # driver (run_trossen_eval.run_episode) writes the videos after the rollout.
+        # Episode boundary: bump the session id so the SERVER resets its autoregressive
+        # frame buffers for the new episode (previously omitted -> server state persisted).
+        self._session_counter += 1
+        self._session_id = f"trossen-sim-{os.getpid()}-{self._session_counter}"
+        # clear the per-episode video frame buffers. The eval driver
+        # (run_trossen_eval.run_episode) writes the videos after the rollout.
         if self._video is not None:
             self._video.reset_episode()
         self._last_dream_frames = []
@@ -299,6 +309,8 @@ class DreamZeroRemotePolicy(PolicyBase):
         # by an "endpoint" key ("infer" vs "reset"); the openpi websocket client does
         # not add it, so set it here (a server-protocol concern, not embodiment-specific).
         request["endpoint"] = "infer"
+        # Session id so the server resets its frame buffers per episode (see reset()).
+        request["session_id"] = self._session_id
         response = self._call_server_with_retry(request)
 
         # Stash the WAM "dream" video for this chunk (server packs it under
@@ -315,6 +327,25 @@ class DreamZeroRemotePolicy(PolicyBase):
         assert chunk.shape[0] >= self._open_loop_horizon, (
             f"Server returned horizon {chunk.shape[0]} < configured open_loop_horizon {self._open_loop_horizon}"
         )
+
+        # ROW AUDIT: dump the FULL predicted chunk (all rows, not just the open_loop_horizon
+        # rows we replay) for the first few fetches -- the first fetch is from the rest pose.
+        # If left-shoulder Lj1 rises toward ~2.0-2.4 in later rows, the model DOES predict the
+        # reach but we discard those rows (cadence/horizon cause); if all rows stay ~1.1-1.4,
+        # it's visual/action-head OOD. (gated by WAM_DEBUG_ACTIONS)
+        if os.environ.get("WAM_DEBUG_ACTIONS"):
+            self._fetch_i = getattr(self, "_fetch_i", 0)
+            if self._fetch_i < 3:
+                n = chunk.shape[0]
+                print(f"[ROWAUDIT fetch={self._fetch_i} env={env_id}] rows={n} replay_horizon={self._open_loop_horizon} "
+                      f"session={self._session_id}", flush=True)
+                print(f"[ROWAUDIT fetch={self._fetch_i}] Lj1(all rows)={np.round(chunk[:, 1], 3).tolist()}", flush=True)
+                print(f"[ROWAUDIT fetch={self._fetch_i}] Lj2={np.round(chunk[:, 2], 3).tolist()}", flush=True)
+                print(f"[ROWAUDIT fetch={self._fetch_i}] Lgrip={np.round(chunk[:, 6], 3).tolist()}", flush=True)
+                print(f"[ROWAUDIT fetch={self._fetch_i}] Rj1={np.round(chunk[:, 8], 3).tolist()}", flush=True)
+                print(f"[ROWAUDIT fetch={self._fetch_i}] rownorm={np.round(np.linalg.norm(chunk, axis=1), 3).tolist()}", flush=True)
+            self._fetch_i += 1
+
         return chunk[: self._open_loop_horizon].astype(np.float32, copy=True)
 
     def _call_server_with_retry(self, server_request: dict[str, Any]) -> dict[str, Any]:
