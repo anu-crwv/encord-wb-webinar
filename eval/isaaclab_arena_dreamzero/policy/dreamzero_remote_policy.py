@@ -228,6 +228,12 @@ class DreamZeroRemotePolicy(PolicyBase):
             if self._dbg_step % 10 == 0:
                 ex = self._adapter.extract(observation, 0)
                 st = np.asarray(ex.state, dtype=float)
+                tgt = np.asarray(batch[0], dtype=float)
+                cfg = os.environ.get("DZ_ACTION_CFG_SCALE", "?")
+                # Commanded action vs current state (Lj1 idx1 is the shoulder that must swing
+                # ~1.05->2.3 to reach down; if the action stays ~current, the arm hovers).
+                print(f"[ACTDBG s={self._dbg_step}] cfg={cfg} target(16)={np.round(tgt, 3).tolist()}", flush=True)
+                print(f"[ACTDBG s={self._dbg_step}] delta(target-state)={np.round(tgt - st, 3).tolist()}", flush=True)
                 print(f"[ACTDBG s={self._dbg_step}] state_sent(16)={np.round(st, 3).tolist()}", flush=True)
                 # Flag any state dim outside the real [p1, p99] band -> out-of-distribution.
                 if getattr(self, "_real_stats", None) is not None and st.shape[0] == self._real_stats.shape[1]:
