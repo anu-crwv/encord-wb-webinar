@@ -24,5 +24,5 @@ for i in $(seq 1 60); do
   echo "[offline] server probe $i..."; sleep 10
 done
 
-python "${WAM_EVAL_SRC}/offline_eval.py"
+python "${WAM_EVAL_SRC}/${WAM_EVAL_ENTRY:-offline_eval.py}"
 echo "=== offline runner done ==="
