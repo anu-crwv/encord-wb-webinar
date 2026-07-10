@@ -8,17 +8,17 @@
   ],
   "jobs": [
     {
-      "name": "trossen_pnp_dreamzero_cube_in_bowl",
+      "name": "trossen_pnp_dreamzero_coffee_in_cup",
       "arena_env_args": {
         "enable_cameras": true,
         "environment": "trossen_pick_and_place",
         "embodiment": "trossen_mobile_ai",
-        "pick_up_object": "rubiks_cube_hot3d_robolab",
-        "destination_location": "bowl_ycb_robolab",
+        "pick_up_object": "coffee_can_ycb_robolab",
+        "destination_location": "mug_ycb_robolab",
         "hdr": "home_office_robolab"
       },
       "num_episodes": 10,
-      "language_instruction": "Pick up the cube and place it in the bowl.",
+      "language_instruction": "pour the coffee into the cup",
       "policy_type": "isaaclab_arena_dreamzero.policy.dreamzero_remote_policy.DreamZeroRemotePolicy",
       "policy_config_dict": {
         "embodiment_adapter": "trossen",
