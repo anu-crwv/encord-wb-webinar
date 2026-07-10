@@ -129,7 +129,10 @@ def main() -> None:
         "total_videos": len(episodes) * len(VIDEO_KEYS),
         "total_chunks": 1,
         "chunks_size": lab_info.get("chunks_size", 1000),
-        "fps": lab_info.get("fps", 30),
+        # `or 30`: some captions artifacts (e.g. encord-captions:v3) ship info.json with fps=None
+        # (key present but null), so .get(...,30) returns None; coerce to the Trossen 30fps. The
+        # video loader (lerobot.py) needs a numeric top-level fps for timestamp->frame mapping.
+        "fps": (lab_info.get("fps") or 30),
         "splits": {"train": f"0:{len(episodes)}"},
         "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
         "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
@@ -187,6 +190,10 @@ def main() -> None:
     print(f"[encord] restored tasks.jsonl ({ntasks} tasks) + {len(episodes)} episodes")
     print("[encord] modality summary: state=%s action=%s video=%s annotation=%s" % (
         list(mod["state"]), list(mod["action"]), list(mod["video"]), list(mod["annotation"])))
+    # Free the ~44GB artifact download (merge + converter are done; keeping it stalls the PVC —
+    # this is what left a 33GB orphaned encord_dl behind after the previous build).
+    shutil.rmtree(dl, ignore_errors=True)
+    print(f"[encord] cleaned up download scratch {dl}")
     run.finish()
     print("[encord] done.")
 
