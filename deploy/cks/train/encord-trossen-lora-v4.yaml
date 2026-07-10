@@ -65,6 +65,9 @@ spec:
             - {name: DATA_CONFIG,    value: "dreamzero/trossen_relative"}
             - {name: DATA_ROOT_KEY,  value: "trossen_data_root"}
             - {name: WAM_DATASET_LOCAL_DIR, value: "/data/wam/datasets/encord_trossen_v4"}
+            # Record the Encord export halves as INPUT lineage (we train from the merged local dir but
+            # don't upload it; these existing artifacts give encord-* -> train run -> checkpoint).
+            - {name: WAM_DATASET_SOURCE_ARTIFACTS, value: "encord-wb-physical-ai/wam-finetune-webinar/encord-source-data:v4,encord-wb-physical-ai/wam-finetune-webinar/encord-captions:v3"}
             - {name: WAM_CKPT_ARTIFACT_NAME, value: "dreamzero-trossen-lora"}
             - {name: VIDEO_BACKEND,  value: ""}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}

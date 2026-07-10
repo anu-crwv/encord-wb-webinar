@@ -132,18 +132,24 @@ def build_overrides(wan_dir, umt5_dir, agibot_dir, data_dir) -> list[str]:
     return ov
 
 
+def _train_tags() -> list:
+    """Workspace-navigation tags (smoke vs full-scale, step count, embodiment, arch) + extras from
+    WAM_TRAIN_TAGS. Computed once so the launcher (wandb.init tags=) AND the trainer subprocess
+    (WANDB_TAGS env, see main) apply the SAME set: the trainer RESUMES the run and, without
+    WANDB_TAGS, wandb drops the launcher's tags (only immutable use_artifact edges survive)."""
+    _emb = DATA_CONFIG.split("/")[-1].replace("_relative", "").replace("_", "-")
+    return sorted(
+        {"train", ARCH, f"{MAX_STEPS}-steps", "full-scale" if int(MAX_STEPS) >= 1000 else "smoke", _emb}
+        | {t.strip() for t in os.environ.get("WAM_TRAIN_TAGS", "").split(",") if t.strip()}
+    )
+
+
 def primary_prepare():
     """rank0: open the shared run, record artifact lineage, and stage the dataset on the PVC."""
     os.makedirs(os.path.dirname(READY_FLAG), exist_ok=True)
     if os.path.exists(READY_FLAG):
         os.remove(READY_FLAG)
-    # W&B run tags for easy navigation in the workspace (smoke vs full-scale, step
-    # count, embodiment, arch). Extra tags via WAM_TRAIN_TAGS (comma-separated).
-    _emb = DATA_CONFIG.split("/")[-1].replace("_relative", "").replace("_", "-")
-    tags = sorted(
-        {"train", ARCH, f"{MAX_STEPS}-steps", "full-scale" if int(MAX_STEPS) >= 1000 else "smoke", _emb}
-        | {t.strip() for t in os.environ.get("WAM_TRAIN_TAGS", "").split(",") if t.strip()}
-    )
+    tags = _train_tags()
     run = wandb.init(
         entity=ENTITY, project=PROJECT, id=RUN_ID, job_type="train", name=Path(OUTPUT_DIR).name,
         settings=wandb.Settings(mode="shared", x_primary=True, x_label="launcher-node0"),
@@ -157,9 +163,18 @@ def primary_prepare():
     for name, art in ART.items():
         run.use_artifact(art)          # input-lineage edge; weights already on the PVC
     if DATASET_LOCAL_DIR:
-        # Train from a local (not-yet-registered) dataset dir on the PVC; no dataset artifact edge.
+        # Train from a local (merged) dataset dir on the PVC. We don't UPLOAD the merged dataset as a
+        # new W&B artifact, but we DO record its SOURCE artifacts (the Encord export halves) as input
+        # lineage so the graph reads encord-source-data/encord-captions -> this train run -> checkpoint.
+        # WAM_DATASET_SOURCE_ARTIFACTS = comma-separated artifact refs (entity/project/name:ver).
+        for src in [s.strip() for s in os.environ.get("WAM_DATASET_SOURCE_ARTIFACTS", "").split(",") if s.strip()]:
+            try:
+                run.use_artifact(src)
+                print(f"[train] recorded dataset SOURCE artifact input: {src}")
+            except Exception as e:  # noqa: BLE001
+                print(f"[train] WARN could not use_artifact source '{src}': {e}")
         data_dir = DATASET_LOCAL_DIR
-        print(f"[train] using local dataset dir {data_dir} (no dataset artifact)")
+        print(f"[train] using local dataset dir {data_dir} (sources linked; merged dir not uploaded)")
     else:
         # dataset is a managed artifact -> download to a CLEAN dir (digest-based download won't delete
         # files absent from the new manifest, so wipe first to avoid cross-version contamination).
@@ -203,6 +218,9 @@ def main() -> None:
     env = os.environ.copy()
     env.update(
         WANDB_ENTITY=ENTITY, WANDB_PROJECT=PROJECT, WANDB_RUN_ID=RUN_ID, WANDB_RESUME="allow",
+        # The trainer subprocess RESUMES the run; wandb.init natively reads WANDB_TAGS, so setting it
+        # here keeps the launcher's tags on the run (HF's WandbCallback passes no tags -> they'd drop).
+        WANDB_TAGS=",".join(_train_tags()),
         HYDRA_FULL_ERROR="1", PYTHONPATH=f"{REPO_ROOT}:{env.get('PYTHONPATH', '')}",
     )
     launch = ["torchrun", f"--nproc_per_node={NUM_GPUS}"]
