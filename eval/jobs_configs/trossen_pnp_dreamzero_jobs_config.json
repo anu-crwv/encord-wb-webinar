@@ -15,9 +15,9 @@
         "embodiment": "trossen_mobile_ai",
         "pick_up_object": "coffee_can_ycb_robolab",
         "destination_location": "mug_ycb_robolab",
-        "hdr": "home_office_robolab"
+        "hdr": "photo_studio_robolab"
       },
-      "num_episodes": 10,
+      "num_episodes": 3,
       "language_instruction": "pour the coffee into the cup",
       "policy_type": "isaaclab_arena_dreamzero.policy.dreamzero_remote_policy.DreamZeroRemotePolicy",
       "policy_config_dict": {
