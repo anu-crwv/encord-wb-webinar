@@ -49,11 +49,14 @@ spec:
             - {name: DZ_DREAM_VIDEO, value: "1"}
             # Classifier-free guidance on the ACTION branch (was cond-only -> mean-collapse
             # on sim frames). Match the video guidance; tune down if actions overshoot.
-            - {name: DZ_ACTION_CFG_SCALE, value: "5.0"}
+            - {name: DZ_ACTION_CFG_SCALE, value: "12.0"}
+            # Full DiT: run all 16 denoising steps (no step-caching/skipping). Default is 8;
+            # step-skipping reuses cached predictions which can degrade the action amplitude.
+            - {name: NUM_DIT_STEPS, value: "16"}
             - {name: WANDB_ENTITY, value: encord-wb-physical-ai}
             - {name: WANDB_PROJECT, value: wam-finetune-webinar}
-            - {name: LORA_ARTIFACT, value: "encord-wb-physical-ai/wam-finetune-webinar/dreamzero-trossen-lora:v4"}
-            - {name: MODEL_DIR, value: "/checkpoints/wam/eval/dreamzero-trossen-lora-v4"}
+            - {name: LORA_ARTIFACT, value: "encord-wb-physical-ai/wam-finetune-webinar/dreamzero-trossen-lora:v5"}
+            - {name: MODEL_DIR, value: "/checkpoints/wam/eval/dreamzero-trossen-lora-v5"}
             - {name: PYTHONUNBUFFERED, value: "1"}
             - {name: TORCH_COMPILE_DISABLE, value: "1"}
             - {name: TORCHDYNAMO_DISABLE, value: "1"}
