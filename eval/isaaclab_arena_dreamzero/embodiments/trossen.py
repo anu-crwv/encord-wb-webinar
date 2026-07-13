@@ -200,8 +200,14 @@ class TrossenCameraCfg:
         is_tiled = getattr(self, "_is_tiled_camera", True)
         Cam = TiledCameraCfg if is_tiled else CameraCfg
         Off = Cam.OffsetCfg
+        # focal_length matches the REAL Intel RealSense D405 (~87 deg HFOV) the Trossen uses, NOT the
+        # wide 104 deg the default 2.1 gave: HFOV = 2*atan((h_aperture/2)/focal) = 2*atan(2.688/2.83)
+        # = 87.6 deg. The wide sim FOV saw far more of the room than the real cam -> the rendered frame
+        # was out-of-distribution for the action head (which trained on ~87 deg real frames). Overridable
+        # via WAM_CAM_FOCAL while iterating the sim-to-real match.
+        _focal = float(os.environ.get("WAM_CAM_FOCAL", "2.83"))
         common = dict(height=480, width=640, data_types=["rgb"],
-                      spawn=sim_utils.PinholeCameraCfg(focal_length=2.1, focus_distance=28.0,
+                      spawn=sim_utils.PinholeCameraCfg(focal_length=_focal, focus_distance=28.0,
                                                        horizontal_aperture=5.376, vertical_aperture=4.032))
         # Reproduce the REAL Trossen camera frames from mobile_ai.usd (verified via
         # usd_probe.py). The massless *_color_optical_frame prims are pruned when Arena

@@ -58,7 +58,10 @@ def _domain_randomize(env, episode_idx: int):
     isn't a single fixed synthetic look. The env is built once for all episodes, so the
     build-time HDR/light variations can't re-sample -- we drive it directly here, in the
     same per-episode hook as the rest-pose seed. Returns a refreshed observation or None."""
-    if not os.environ.get("WAM_DOMAIN_RAND"):
+    # NB: treat "0"/"false"/"no" as OFF -- a bare `not os.environ.get(...)` leaves DR ON for
+    # WAM_DOMAIN_RAND=0 because "0" is a truthy string in Python (this silently overrode the
+    # domain-MATCH HDR/light every episode). Only "1"/"true"/"yes" enable randomization.
+    if os.environ.get("WAM_DOMAIN_RAND", "").strip().lower() not in ("1", "true", "yes", "on"):
         return None
     try:
         import random
