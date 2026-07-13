@@ -1,0 +1,66 @@
+# One-shot GPU diagnostic: does feeding the action head GROUND-TRUTH video latents (latent_video=)
+# fix the under-commitment vs the model's own self-conditioned latents? Loads the full v5 model
+# locally (like the server) and runs eval/diag_gt_cond.py. Reuses the server's persisted deps
+# (/data/.home-trossen-server/.local) + the already-downloaded v5 checkpoint. Runs on a free RTX GPU
+# (separate GPU from the live server). Prints a per-joint normal-vs-gtcond table, then exits.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trossen-diag-gtcond
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "DZ-diag"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "DZ-diag"}
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        nvidia.com/gpu.product: NVIDIA-RTX-PRO-6000-Blackwell-Server-Edition
+      tolerations:
+        - {key: is_gpu, value: "true", operator: Equal, effect: PreferNoSchedule}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: diag
+          image: nvcr.io/nvidia/pytorch:25.04-py3
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-exo", "pipefail", "-c"]
+          args:
+            - |
+              export HOME=/data/.home-trossen-server TMPDIR=/data/.home-trossen-server/.tmp HF_HOME=/data/.hf_home
+              mkdir -p "$TMPDIR" "$HF_HOME"
+              export WAM_REPO_ROOT=/data/src/dreamzero-wam DREAMZERO_UPSTREAM=/data/dreamzero-src
+              # groot FIRST (trossen embodiment) then upstream (eval_utils); deps come from HOME/.local (persisted by the server).
+              export PYTHONPATH="$WAM_REPO_ROOT:$DREAMZERO_UPSTREAM:${PYTHONPATH:-}"
+              export ATTENTION_BACKEND=TE PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+              cd "$WAM_REPO_ROOT"
+              nvidia-smi -L || true
+              python -c "import openpi_client, groot, torch; print('imports OK', torch.__version__)"
+              torchrun --nproc_per_node=1 --standalone eval/diag_gt_cond.py
+              echo "=== diag-gtcond done ==="
+          envFrom: [{secretRef: {name: wandb-api-key}}]
+          env:
+            - {name: MODEL_DIR,        value: "/checkpoints/wam/eval/dreamzero-trossen-lora-v5"}
+            - {name: WAM_TROSSEN_DATA, value: "/data/wam/datasets/encord_trossen_v4"}
+            - {name: DIAG_TASK,        value: "coffee"}
+            - {name: DZ_ACTION_CFG_SCALE, value: "5.0"}
+            - {name: NUM_DIT_STEPS,    value: "16"}
+            - {name: DIAG_MAX_CHUNKS,  value: "16"}
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: TORCH_COMPILE_DISABLE, value: "1"}
+            - {name: TORCHDYNAMO_DISABLE, value: "1"}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+          resources:
+            requests: {cpu: "8", memory: 96Gi, nvidia.com/gpu: "1"}
+            limits:   {cpu: "32", memory: 256Gi, nvidia.com/gpu: "1"}
+          volumeMounts:
+            - {name: data,        mountPath: /data}
+            - {name: checkpoints, mountPath: /checkpoints}
+            - {name: dshm,        mountPath: /dev/shm}
+      volumes:
+        - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+        - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}
+        - {name: dshm,        emptyDir: {medium: Memory, sizeLimit: 32Gi}}
