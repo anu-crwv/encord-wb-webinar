@@ -1,0 +1,66 @@
+project_hash: 23f30792-4d41-4d02-8c39-128dbfe3262f
+
+# Workflow stage and outgoing pathways for the local Encord task agent.
+agent_stage_name: "Gemini Captioning"
+success_pathway: "success"
+failure_pathway: "failure"
+metadata_mismatch_pathway: "human_review"
+
+# Gemini settings. Put the actual key in your shell or in this folder's ignored .env.
+gemini_api_key_env_var: "GEMINI_API_KEY"
+gemini_model: "gemini-2.5-flash"
+temperature: 0.0
+max_output_tokens: 2048
+file_processing_timeout_seconds: 300
+keep_uploaded_files: false
+
+caption_titles:
+  - "Language Instruction 1"
+  - "Language Instruction 2"
+  - "Language Instruction 3"
+
+# Exact client-metadata key that contains the expected task name.
+# The agent does not scan aliases or infer task names from paths.
+metadata_task_key: "task_name"
+
+# Which video child to send to Gemini when the task is a data group.
+# Current Trossen data groups use camera_cam_high for the high/exterior camera.
+# If this layout is missing, the agent sends a random video child and routes the task to human_review.
+video_layout: "camera_cam_high"
+
+# Local operational settings.
+local_video_cache_dir: ".cache/videos_srs"
+
+# Recommended: true. The agent keeps the original downloaded video cached, then
+# creates a smaller full-episode MP4 proxy for Gemini. This is much faster and
+# cheaper than uploading the original high-bitrate camera video every time.
+use_gemini_video_proxy: true
+gemini_video_proxy_width: 640
+gemini_video_proxy_fps: 4
+gemini_video_proxy_crf: 32
+gemini_video_proxy_preset: "veryfast"
+
+overwrite: false
+
+# Recommended: 3 for this local runner. It keeps a few Gemini calls in flight
+# without making quota/rate-limit failures too noisy. Drop to 1 when debugging.
+task_batch_size: 3
+
+# Parallel worker sharding for running multiple terminals on the same project/stage.
+# Single-worker mode:
+parallel_worker_count: 3
+parallel_worker_index: 0
+
+# For two terminals, copy this config twice and set:
+#   worker 0: parallel_worker_count: 2, parallel_worker_index: 0
+#   worker 1: parallel_worker_count: 2, parallel_worker_index: 1
+# The agent takes a local lock per shard so duplicate worker indexes exit clearly.
+worker_lock_dir: ".cache/worker-locks"
+
+# Runner startup occasionally gets transient Encord UnknownException responses.
+# Retry those, but do not retry real auth/permission failures.
+runner_init_retries: 3
+runner_init_retry_delay_seconds: 5.0
+
+max_tasks_per_stage: null
+refresh_every: null
