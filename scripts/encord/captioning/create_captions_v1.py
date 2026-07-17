@@ -67,6 +67,21 @@ def row_chunks(rows: list[Any]) -> list[list[Any]]:
     return [rows[index : index + BUNDLE_SIZE] for index in range(0, len(rows), BUNDLE_SIZE)]
 
 
+def fetch_storage_items_by_uuid(client: EncordUserClient, backing_ids: list[Any]) -> dict[str, Any]:
+    if not backing_ids:
+        return {}
+
+    typer.echo(f"Fetching {len(backing_ids)} backing storage items in batches of {BUNDLE_SIZE}...")
+    storage_items: dict[str, Any] = {}
+    fetched = 0
+    for chunk in row_chunks(backing_ids):
+        for item in client.get_storage_items(chunk):
+            storage_items[str(item.uuid)] = item
+        fetched += len(chunk)
+        log_progress("Fetched backing storage items", fetched, len(backing_ids))
+    return storage_items
+
+
 def create_client() -> EncordUserClient:
     ssh_key_file = os.environ.get("ENCORD_SSH_KEY_FILE")
     if not ssh_key_file:
@@ -276,34 +291,57 @@ def resolve_dataset_rows(
     typer.echo(f"Preparing {len(data_rows)} dataset rows.")
 
     backing_ids = [row.backing_item_uuid for row in data_rows if getattr(row, "backing_item_uuid", None)]
-    storage_items = {str(item.uuid): item for item in client.get_storage_items(backing_ids)} if backing_ids else {}
+    storage_items = fetch_storage_items_by_uuid(client, backing_ids)
 
     metadata_by_hash: dict[str, dict[str, Any]] = {}
     skipped: list[dict[str, Any]] = []
     unsupported_tasks: dict[str, int] = {}
     missing_parquets: list[str] = []
+    missing_storage_items = 0
+    failed_episode_count = 0
+    supported_task_count = 0
+    missing_parquet_count = 0
 
-    for row in data_rows:
+    typer.echo("Resolving task metadata and source parquet URIs for dataset rows...")
+    for index, row in enumerate(data_rows, start=1):
         data_hash = str(row.uid)
         item = storage_items.get(str(getattr(row, "backing_item_uuid", "")))
         if item is None:
+            missing_storage_items += 1
             skipped.append({"data_hash": data_hash, "data_title": row.title, "reason": "missing_storage_item"})
+            log_progress("Resolved metadata", index, len(data_rows))
             continue
 
         metadata = merged_row_metadata(item, client, row.title)
         metadata_by_hash[data_hash] = metadata
 
         if is_failed_episode(metadata, row.title):
+            failed_episode_count += 1
             skipped.append({"data_hash": data_hash, "data_title": row.title, "reason": "failed_episode_prefix"})
+            log_progress("Resolved metadata", index, len(data_rows))
             continue
 
         task_name = metadata.get("task_name")
         if task_name not in TASK_CAPTIONS:
             unsupported_tasks[str(task_name or "")] = unsupported_tasks.get(str(task_name or ""), 0) + 1
+            log_progress("Resolved metadata", index, len(data_rows))
             continue
 
         if not source_parquet_uri(metadata, row.title):
+            missing_parquet_count += 1
             missing_parquets.append(str(row.title))
+        else:
+            supported_task_count += 1
+        log_progress("Resolved metadata", index, len(data_rows))
+
+    typer.echo(
+        "Dataset metadata summary: "
+        f"{supported_task_count} supported rows, "
+        f"{sum(unsupported_tasks.values())} unsupported task rows, "
+        f"{missing_parquet_count} missing parquets, "
+        f"{failed_episode_count} failed episodes, "
+        f"{missing_storage_items} missing storage items."
+    )
 
     if unsupported_tasks:
         details = ", ".join(f"{task or '<missing>'}: {count}" for task, count in sorted(unsupported_tasks.items()))
