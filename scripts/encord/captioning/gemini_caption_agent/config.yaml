@@ -30,6 +30,7 @@ video_layout: "camera_cam_high"
 
 # Local operational settings.
 local_video_cache_dir: ".cache/videos_srs"
+failure_log_path: ".cache/gemini-caption-agent/failures.jsonl"
 
 # Recommended: true. The agent keeps the original downloaded video cached, then
 # creates a smaller full-episode MP4 proxy for Gemini. This is much faster and
@@ -49,7 +50,7 @@ task_batch_size: 3
 # Parallel worker sharding for running multiple terminals on the same project/stage.
 # Single-worker mode:
 parallel_worker_count: 3
-parallel_worker_index: 0
+parallel_worker_index: 1
 
 # For two terminals, copy this config twice and set:
 #   worker 0: parallel_worker_count: 2, parallel_worker_index: 0

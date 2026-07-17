@@ -6,6 +6,19 @@ with the 3-camera source dataset artifact.
 The exporter reuses the source episode parquet files from S3 for state/action/timing data, then rewrites
 the task and language annotation columns from Encord captions. It does not fabricate state/action values.
 
+## Supported Project Shape
+
+This exporter supports both single-video/single-view caption projects and data-group caption projects.
+Each Encord label row must have a language-instruction classification and resolve to one episode.
+
+Single-video rows can resolve `episode_path` and `source_parquet_uri` from the row's backing storage item
+metadata. Data-group rows only need the top-level group storage item to carry `episode_path`; the exporter
+matches that path to the required `--source-artifact-ref` and derives the original source/parquet URIs from
+that source artifact's per-camera child metadata.
+
+The exporter does not inspect data-group child items live in Encord. The W&B source dataset artifact is the
+source of truth for data-group video source metadata.
+
 ## Setup
 
 ```bash

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import os
 from pathlib import Path
 from typing import Annotated, Any
@@ -46,6 +47,12 @@ def row_chunks(rows: list[Any]) -> list[list[Any]]:
     return [rows[index : index + BUNDLE_SIZE] for index in range(0, len(rows), BUNDLE_SIZE)]
 
 
+def format_counter(counter: Counter[str]) -> str:
+    if not counter:
+        return "none"
+    return ", ".join(f"{key}: {value}" for key, value in sorted(counter.items()))
+
+
 def client_from_env() -> EncordUserClient:
     key_file = os.environ.get("ENCORD_SSH_KEY_FILE")
     if not key_file:
@@ -56,9 +63,27 @@ def client_from_env() -> EncordUserClient:
     return EncordUserClient.create_with_ssh_private_key(key_path.read_text())
 
 
+def data_type_name(value: Any) -> str:
+    if value is None:
+        return "UNKNOWN"
+    text = str(value)
+    if "." in text:
+        text = text.rsplit(".", 1)[-1]
+    return text.upper()
+
+
 def is_video(label_row: Any) -> bool:
     data_type = getattr(label_row, "data_type", None)
-    return data_type == DataType.VIDEO or str(data_type).lower() in {"video", "data_type.video", "video/mp4"}
+    normalized = data_type_name(data_type).lower()
+    return data_type == DataType.VIDEO or normalized in {"video", "video/mp4"}
+
+
+def is_group(label_row: Any) -> bool:
+    return data_type_name(getattr(label_row, "data_type", None)).lower() == "group"
+
+
+def is_supported_label_row(label_row: Any) -> bool:
+    return is_video(label_row) or is_group(label_row)
 
 
 def full_range(label_row: Any) -> Range:
@@ -79,6 +104,63 @@ def has_language_instruction(label_row: Any) -> bool:
     return bool(language_instruction_instances(label_row))
 
 
+def item_metadata(item: Any) -> dict[str, Any]:
+    metadata = getattr(item, "client_metadata", None) or {}
+    return dict(metadata) if isinstance(metadata, dict) else {}
+
+
+def task_name_from_episode_path(episode_path: Any) -> str | None:
+    parts = [part for part in str(episode_path or "").strip("/").split("/") if part]
+    if "raw-feed" not in parts:
+        return None
+    index = parts.index("raw-feed")
+    if index + 2 >= len(parts):
+        return None
+    family = parts[index + 1]
+    if family not in {"trossen-data", "trossen-data-stationary"}:
+        return None
+    return parts[index + 2]
+
+
+def task_name_from_title(title: Any) -> str | None:
+    task_name = str(title or "").split(" | ", 1)[0].strip()
+    return task_name or None
+
+
+def task_name_from_child_metadata(item: Any) -> str | None:
+    try:
+        children = list(item.get_child_items())
+    except Exception as exc:
+        typer.echo(f"Warning: could not inspect child metadata for {getattr(item, 'name', item)}: {exc}", err=True)
+        return None
+
+    for child in children:
+        task_name = item_metadata(child).get("task_name")
+        if task_name:
+            return str(task_name)
+    return None
+
+
+def resolve_task_name(row: Any, item: Any) -> tuple[str | None, str]:
+    metadata = item_metadata(item)
+    if metadata.get("task_name"):
+        return str(metadata["task_name"]), "client_metadata.task_name"
+
+    task_name = task_name_from_episode_path(metadata.get("episode_path"))
+    if task_name:
+        return task_name, "client_metadata.episode_path"
+
+    task_name = task_name_from_title(getattr(row, "title", None))
+    if task_name:
+        return task_name, "data_row.title"
+
+    task_name = task_name_from_child_metadata(item)
+    if task_name:
+        return task_name, "child_client_metadata.task_name"
+
+    return None, "missing"
+
+
 def task_by_data_hash(project: Any, client: EncordUserClient) -> dict[str, str]:
     typer.echo("Loading attached dataset metadata...")
     datasets = list(project.list_datasets())
@@ -88,42 +170,113 @@ def task_by_data_hash(project: Any, client: EncordUserClient) -> dict[str, str]:
     dataset = client.get_dataset(str(datasets[0].dataset_hash))
     data_rows = list(dataset.data_rows)
     typer.echo(f"Found {len(data_rows)} dataset rows.")
-    storage_items = {
-        str(item.uuid): item
-        for item in client.get_storage_items([row.backing_item_uuid for row in data_rows])
-    }
-    tasks = {}
+    dataset_type_counts = Counter(data_type_name(getattr(row, "data_type", None)) for row in data_rows)
+    typer.echo(f"Dataset row data types: {format_counter(dataset_type_counts)}.")
+
+    backing_ids = [row.backing_item_uuid for row in data_rows if getattr(row, "backing_item_uuid", None)]
+    storage_items = (
+        {str(item.uuid): item for item in client.get_storage_items(backing_ids)}
+        if backing_ids
+        else {}
+    )
+    storage_type_counts = Counter(data_type_name(getattr(item, "item_type", None)) for item in storage_items.values())
+    typer.echo(
+        "Backing storage item types: "
+        f"{format_counter(storage_type_counts)}."
+    )
+
+    tasks: dict[str, str] = {}
+    task_sources: Counter[str] = Counter()
+    task_counts: Counter[str] = Counter()
+    missing_storage_items = 0
     for row in data_rows:
         item = storage_items.get(str(row.backing_item_uuid))
-        metadata = getattr(item, "client_metadata", None) or {}
-        if metadata.get("task_name"):
-            tasks[str(row.uid)] = str(metadata["task_name"])
-    typer.echo(f"Found task metadata for {len(tasks)} rows.")
+        if item is None:
+            missing_storage_items += 1
+            continue
+        task_name, source = resolve_task_name(row, item)
+        task_sources[source] += 1
+        if task_name:
+            tasks[str(row.uid)] = task_name
+            task_counts[task_name] += 1
+
+    typer.echo(f"Resolved task metadata for {len(tasks)} rows.")
+    typer.echo(f"Task metadata sources: {format_counter(task_sources)}.")
+    typer.echo(f"Resolved task counts: {format_counter(task_counts)}.")
+    if missing_storage_items:
+        typer.echo(f"Warning: {missing_storage_items} dataset rows were missing backing storage items.", err=True)
     return tasks
+
+
+def add_language_instruction(row: Any, caption: str, overwrite: bool) -> None:
+    classification = row.ontology_structure.get_child_by_title(
+        title=CLASSIFICATION_TITLE,
+        type_=Classification,
+    )
+    if classification is None:
+        raise RuntimeError(f"Classification not found in ontology: {CLASSIFICATION_TITLE}")
+
+    instance = classification.create_instance()
+    instance.set_answer(answer=caption)
+    if is_video(row):
+        instance.set_for_frames(frames=full_range(row), overwrite=overwrite)
+    row.add_classification_instance(instance, force=overwrite)
 
 
 def main(
     project_hash: Annotated[str, typer.Argument(help="Encord project hash.")],
     overwrite: Annotated[bool, typer.Option(help="Overwrite existing Language Instruction captions.")] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(help="Resolve and report candidate captions without initializing or saving labels."),
+    ] = False,
 ) -> None:
     typer.echo("Connecting to Encord...")
     client = client_from_env()
     project = client.get_project(project_hash)
     tasks = task_by_data_hash(project, client)
-    typer.echo("Listing video label rows...")
-    rows = [row for row in project.list_label_rows_v2() if is_video(row)]
-    total_video_rows = len(rows)
-    typer.echo(f"Found {total_video_rows} video label rows.")
+
+    typer.echo("Listing label rows...")
+    all_rows = list(project.list_label_rows_v2())
+    typer.echo(f"Found {len(all_rows)} label rows.")
+    typer.echo(
+        "Label row data types: "
+        f"{format_counter(Counter(data_type_name(getattr(row, 'data_type', None)) for row in all_rows))}."
+    )
+    rows = [row for row in all_rows if is_supported_label_row(row)]
+    ignored_row_type_count = len(all_rows) - len(rows)
+    typer.echo(f"Found {len(rows)} video/group label rows.")
 
     captions_by_hash = {
         str(row.data_hash): TASK_TO_CAPTION[tasks[str(row.data_hash)]]
         for row in rows
         if str(row.data_hash) in tasks and tasks[str(row.data_hash)] in TASK_TO_CAPTION
     }
+    missing_task_count = sum(1 for row in rows if str(row.data_hash) not in tasks)
+    unsupported_tasks = Counter(
+        tasks[str(row.data_hash)]
+        for row in rows
+        if str(row.data_hash) in tasks and tasks[str(row.data_hash)] not in TASK_TO_CAPTION
+    )
+    unsupported_task_count = sum(unsupported_tasks.values())
+    skipped_before_existing = ignored_row_type_count + missing_task_count + unsupported_task_count
+    if unsupported_tasks:
+        typer.echo(f"Unsupported task names: {format_counter(unsupported_tasks)}.")
+    if missing_task_count:
+        typer.echo(f"Rows missing resolved task metadata: {missing_task_count}.")
+    if ignored_row_type_count:
+        typer.echo(f"Ignored non-video/non-group label rows: {ignored_row_type_count}.")
+
     rows = [row for row in rows if str(row.data_hash) in captions_by_hash]
-    skipped = total_video_rows - len(rows)
+    typer.echo(
+        f"Caption candidates: {len(rows)}. "
+        f"Skipped before existing-label checks: {skipped_before_existing}."
+    )
     if not rows:
         typer.echo("No rows matched the task-to-caption mapping.")
+        return
+    if dry_run:
+        typer.echo("Dry run enabled; not initializing, adding, or saving labels.")
         return
 
     typer.echo(f"Preparing captions for {len(rows)} mapped rows.")
@@ -153,26 +306,18 @@ def main(
 
     typer.echo("Preparing caption updates...")
     touched = []
+    skipped_existing = 0
     for index, row in enumerate(rows, start=1):
         caption = captions_by_hash[str(row.data_hash)]
         if has_language_instruction(row) and not overwrite:
-            skipped += 1
+            skipped_existing += 1
             continue
 
-        classification = row.ontology_structure.get_child_by_title(
-            title=CLASSIFICATION_TITLE,
-            type_=Classification,
-        )
-        if classification is None:
-            raise RuntimeError(f"Classification not found in ontology: {CLASSIFICATION_TITLE}")
-
-        instance = classification.create_instance()
-        instance.set_answer(answer=caption)
-        instance.set_for_frames(frames=full_range(row), overwrite=overwrite)
-        row.add_classification_instance(instance, force=overwrite)
+        add_language_instruction(row, caption, overwrite=overwrite)
         touched.append(row)
         log_progress("Prepared", index, len(rows))
 
+    typer.echo(f"Prepared {len(touched)} rows for update; skipped {skipped_existing} existing caption rows.")
     if touched:
         typer.echo(f"Saving {len(touched)} updated rows...")
         saved = 0
@@ -183,7 +328,10 @@ def main(
             saved += len(chunk)
             log_progress("Saved", saved, len(touched))
 
-    typer.echo(f"Updated {len(touched)} label rows; skipped {skipped}.")
+    typer.echo(
+        f"Updated {len(touched)} label rows; "
+        f"skipped {skipped_before_existing + skipped_existing}."
+    )
 
 
 if __name__ == "__main__":

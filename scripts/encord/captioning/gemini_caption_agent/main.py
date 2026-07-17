@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import atexit
 from contextlib import suppress
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -98,6 +99,7 @@ class AgentConfig(BaseModel):
     metadata_task_key: str = "task_name"
     video_layout: str = "camera_cam_high"
     local_video_cache_dir: str = ".cache/videos"
+    failure_log_path: str = ".cache/gemini-caption-agent/failures.jsonl"
     use_gemini_video_proxy: bool = True
     gemini_video_proxy_width: int = 640
     gemini_video_proxy_fps: int = 4
@@ -277,6 +279,73 @@ def cache_root(config: AgentConfig) -> Path:
 def worker_lock_root(config: AgentConfig) -> Path:
     path = Path(config.worker_lock_dir).expanduser()
     return path if path.is_absolute() else SCRIPT_DIR / path
+
+
+def failure_log_path(config: AgentConfig) -> Path:
+    path = Path(config.failure_log_path).expanduser()
+    return path if path.is_absolute() else SCRIPT_DIR / path
+
+
+def append_failure_log(
+    *,
+    config: AgentConfig,
+    task: AgentTask,
+    failure_kind: str,
+    exc: Exception,
+    route: str,
+    task_name: str | None,
+    selected_videos: list[SelectedVideo],
+) -> None:
+    record: dict[str, Any] = {
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "data_hash": str(task.data_hash),
+        "failure_kind": failure_kind,
+        "exception_class": type(exc).__name__,
+        "message": str(exc),
+        "agent_stage_name": config.agent_stage_name,
+        "worker_shard": {
+            "index": config.parallel_worker_index,
+            "count": config.parallel_worker_count,
+        },
+        "gemini_model": config.gemini_model,
+        "selected_video_layouts": [video.layout_key for video in selected_videos],
+        "route": route,
+    }
+    if task_name is not None:
+        record["task_name"] = task_name
+
+    path = failure_log_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+
+
+def log_failure_best_effort(
+    *,
+    config: AgentConfig,
+    task: AgentTask,
+    failure_kind: str,
+    exc: Exception,
+    route: str,
+    task_name: str | None,
+    selected_videos: list[SelectedVideo],
+) -> None:
+    try:
+        append_failure_log(
+            config=config,
+            task=task,
+            failure_kind=failure_kind,
+            exc=exc,
+            route=route,
+            task_name=task_name,
+            selected_videos=selected_videos,
+        )
+    except Exception as log_exc:
+        typer.echo(
+            f"[agent] {task.data_hash}: failed to write failure log "
+            f"{failure_log_path(config)}: {log_exc}",
+            err=True,
+        )
 
 
 def unique_tmp_path(cache_path: Path, suffix: str) -> Path:
@@ -915,6 +984,8 @@ def build_runner(config: AgentConfig) -> Runner:
         task: AgentTask,
         project: Project,
     ) -> str | None:
+        selected: list[SelectedVideo] = []
+        task_name: str | None = None
         try:
             if not worker_owns_data_hash(task.data_hash, config):
                 return None
@@ -964,9 +1035,27 @@ def build_runner(config: AgentConfig) -> Runner:
             return route
         except errors.APIError as exc:
             typer.echo(f"[agent] {task.data_hash}: Gemini API failed: {exc}", err=True)
+            log_failure_best_effort(
+                config=config,
+                task=task,
+                failure_kind="gemini_api_error",
+                exc=exc,
+                route=config.failure_pathway,
+                task_name=task_name,
+                selected_videos=selected,
+            )
             return config.failure_pathway
         except Exception as exc:
             typer.echo(f"[agent] {task.data_hash}: failed: {exc}", err=True)
+            log_failure_best_effort(
+                config=config,
+                task=task,
+                failure_kind="agent_error",
+                exc=exc,
+                route=config.failure_pathway,
+                task_name=task_name,
+                selected_videos=selected,
+            )
             return config.failure_pathway
 
     return runner
