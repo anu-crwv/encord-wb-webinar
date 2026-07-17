@@ -2,10 +2,11 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "encord @ git+ssh://git@github.com/encord-team/encord-client-python-private.git@b1edece2",
+#     "numpy",
 #     "typer",
 # ]
 # ///
-"""Create Language Instruction captions from Encord task metadata."""
+"""Create Language Instruction 1/2/3 captions from Encord task metadata."""
 
 from __future__ import annotations
 
@@ -21,21 +22,11 @@ from encord.constants.enums import DataType
 from encord.objects import Classification
 from encord.objects.frames import Range
 
+from helper.captioning_v1 import CLASSIFICATION_TITLES, TASK_CAPTIONS, caption_variants_for_task
 
-CLASSIFICATION_TITLE = "Language Instruction"
+
+DEFAULT_ARM_PHRASE = "the robot arm"
 BUNDLE_SIZE = 100
-TASK_TO_CAPTION = {
-    "Pour nuts & bolts": "pour the nuts and bolts into the tray",
-    "Batteries": "place the batteries into the tray",
-    "Pour Coffee 2": "pour the coffee into the cup",
-    "Sort glue by type": "sort the glue bottles by type",
-    "Sort tape & safety glasses (2)": "sort the tape and safety glasses",
-    "Microfiber towels": "fold the microfiber towels",
-    "Coil wire": "coil the wire",
-    "Plug ethernet cable into network device": "plug the ethernet cable into the network switch",
-    "Plug ethernet cable into network device 2": "plug the ethernet cable into the network switch",
-    "Plug ethernet cable into network switch 3": "plug the ethernet cable into the network switch",
-}
 
 
 def log_progress(action: str, index: int, total: int) -> None:
@@ -95,7 +86,7 @@ def language_instruction_instances(label_row: Any) -> list[Any]:
     instances = []
     for instance in label_row.get_classification_instances():
         ontology_item = getattr(instance, "ontology_item", None)
-        if getattr(ontology_item, "title", None) == CLASSIFICATION_TITLE:
+        if getattr(ontology_item, "title", None) in CLASSIFICATION_TITLES:
             instances.append(instance)
     return instances
 
@@ -208,24 +199,45 @@ def task_by_data_hash(project: Any, client: EncordUserClient) -> dict[str, str]:
     return tasks
 
 
-def add_language_instruction(row: Any, caption: str, overwrite: bool) -> None:
-    classification = row.ontology_structure.get_child_by_title(
-        title=CLASSIFICATION_TITLE,
-        type_=Classification,
-    )
-    if classification is None:
-        raise RuntimeError(f"Classification not found in ontology: {CLASSIFICATION_TITLE}")
+def validate_caption_classifications(project: Any) -> None:
+    typer.echo("Validating caption ontology classifications...")
+    missing = []
+    for title in CLASSIFICATION_TITLES:
+        try:
+            project.ontology_structure.get_child_by_title(title=title, type_=Classification)
+        except Exception:
+            missing.append(title)
+    if missing:
+        raise typer.BadParameter(
+            "Project ontology is missing required caption classifications: "
+            f"{', '.join(missing)}"
+        )
 
-    instance = classification.create_instance()
-    instance.set_answer(answer=caption)
-    if is_video(row):
-        instance.set_for_frames(frames=full_range(row), overwrite=overwrite)
-    row.add_classification_instance(instance, force=overwrite)
+
+def captions_for_task(task_name: str) -> tuple[str, str, str]:
+    return caption_variants_for_task(task_name, DEFAULT_ARM_PHRASE)
+
+
+def add_language_instructions(row: Any, captions: tuple[str, str, str], overwrite: bool) -> None:
+    row_range = full_range(row) if is_video(row) else None
+    for title, caption in zip(CLASSIFICATION_TITLES, captions, strict=True):
+        classification = row.ontology_structure.get_child_by_title(
+            title=title,
+            type_=Classification,
+        )
+        if classification is None:
+            raise RuntimeError(f"Classification not found in ontology: {title}")
+
+        instance = classification.create_instance()
+        instance.set_answer(answer=caption)
+        if row_range is not None:
+            instance.set_for_frames(frames=row_range, overwrite=overwrite)
+        row.add_classification_instance(instance, force=overwrite)
 
 
 def main(
     project_hash: Annotated[str, typer.Argument(help="Encord project hash.")],
-    overwrite: Annotated[bool, typer.Option(help="Overwrite existing Language Instruction captions.")] = False,
+    overwrite: Annotated[bool, typer.Option(help="Overwrite existing Language Instruction 1/2/3 captions.")] = False,
     dry_run: Annotated[
         bool,
         typer.Option(help="Resolve and report candidate captions without initializing or saving labels."),
@@ -234,6 +246,7 @@ def main(
     typer.echo("Connecting to Encord...")
     client = client_from_env()
     project = client.get_project(project_hash)
+    validate_caption_classifications(project)
     tasks = task_by_data_hash(project, client)
 
     typer.echo("Listing label rows...")
@@ -248,15 +261,15 @@ def main(
     typer.echo(f"Found {len(rows)} video/group label rows.")
 
     captions_by_hash = {
-        str(row.data_hash): TASK_TO_CAPTION[tasks[str(row.data_hash)]]
+        str(row.data_hash): captions_for_task(tasks[str(row.data_hash)])
         for row in rows
-        if str(row.data_hash) in tasks and tasks[str(row.data_hash)] in TASK_TO_CAPTION
+        if str(row.data_hash) in tasks and tasks[str(row.data_hash)] in TASK_CAPTIONS
     }
     missing_task_count = sum(1 for row in rows if str(row.data_hash) not in tasks)
     unsupported_tasks = Counter(
         tasks[str(row.data_hash)]
         for row in rows
-        if str(row.data_hash) in tasks and tasks[str(row.data_hash)] not in TASK_TO_CAPTION
+        if str(row.data_hash) in tasks and tasks[str(row.data_hash)] not in TASK_CAPTIONS
     )
     unsupported_task_count = sum(unsupported_tasks.values())
     skipped_before_existing = ignored_row_type_count + missing_task_count + unsupported_task_count
@@ -308,12 +321,12 @@ def main(
     touched = []
     skipped_existing = 0
     for index, row in enumerate(rows, start=1):
-        caption = captions_by_hash[str(row.data_hash)]
+        captions = captions_by_hash[str(row.data_hash)]
         if has_language_instruction(row) and not overwrite:
             skipped_existing += 1
             continue
 
-        add_language_instruction(row, caption, overwrite=overwrite)
+        add_language_instructions(row, captions, overwrite=overwrite)
         touched.append(row)
         log_progress("Prepared", index, len(rows))
 

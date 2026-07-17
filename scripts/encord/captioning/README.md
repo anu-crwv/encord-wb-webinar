@@ -15,10 +15,11 @@ aws sso login --profile encord-robotics
 it reads the group item metadata first, then falls back to child item metadata to resolve `task_name`, episode
 metadata, and the source parquet.
 
-`create_captions_from_metadata.py` supports existing single-video and data-group projects. It writes one
-`Language Instruction` classification. For videos, the classification is applied across the full video range.
-For data groups, the classification is written at group level. Task names are resolved from top-level metadata
-first, then `episode_path`, then the row title, with child metadata used only as a last fallback.
+`create_captions_from_metadata.py` supports existing single-video and data-group projects. It writes the
+`Language Instruction 1`, `Language Instruction 2`, and `Language Instruction 3` global text classifications.
+For videos, the classifications are applied across the full video range. For data groups, they are written at
+group level. Task names are resolved from top-level metadata first, then `episode_path`, then the row title,
+with child metadata used only as a last fallback.
 
 ## Create V1 Caption Project
 
@@ -53,8 +54,8 @@ Source parquets are cached in the main worktree's shared S3 cache:
 
 ## Other Scripts
 
-`create_captions_from_metadata.py` applies one `Language Instruction` classification to an existing single-video
-or data-group project from dataset metadata.
+`create_captions_from_metadata.py` applies `Language Instruction 1/2/3` classifications to an existing
+single-video or data-group project from dataset metadata.
 
 `create_empty_language_instruction.py` adds empty language fields to an existing project.
 
