@@ -1,7 +1,7 @@
-description: "531 non SRS episodes. Similar to v3 but with some fixes in multi-camera grouping"
+description: "1364 SRS episodes. Same structure as v4. Production-ready"
 tags:
   - latest
   - source-data
-  - v4
+  - v5
   - production-ready
-  - 531 episodes
+  - 1500 episodes
