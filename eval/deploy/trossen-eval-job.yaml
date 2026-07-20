@@ -41,9 +41,9 @@ spec:
             - {name: WEAVE_PROJECT, value: "wam-finetune-webinar"}
             # Checkpoint under eval — also the Weave leaderboard model label. Must match
             # the server's LORA_ARTIFACT (bump to :v4 once the 3000-step run finishes).
-            - {name: LORA_ARTIFACT, value: "encord-wb-physical-ai/wam-finetune-webinar/dreamzero-trossen-lora:v5"}
+            - {name: LORA_ARTIFACT, value: "encord-wb-physical-ai/wam-finetune-webinar/dreamzero-trossen-lora:v6"}
             # W&B run tags for navigation (auto-tags add eval/trossen/<version>).
-            - {name: WAM_EVAL_TAGS, value: "full-scale,3000-steps,domain-match,fov87,cfg12"}
+            - {name: WAM_EVAL_TAGS, value: "full-scale,8000-steps,v6,1363ep,domain-match,fov87,cfg5"}
             - {name: WAM_EVAL_VIDEO_DIR, value: "/data/wam/eval_videos"}
             # Domain-MATCH (not randomize): a consistent real-ish look (fixed indoor HDR + moderate
             # light + the ~87deg D405 FOV) to pull the synthetic frames back in-distribution for the
