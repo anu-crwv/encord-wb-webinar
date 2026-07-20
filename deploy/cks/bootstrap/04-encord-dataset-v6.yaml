@@ -1,0 +1,67 @@
+# Build the v6 merged LeRobot dataset for the `trossen` embodiment from the LATEST Encord artifacts:
+#   encord-captions:v6    -> data/chunk-000/episode_*.parquet (action[16]+state[16]+task_index+3 lang cols) + meta
+#   encord-source-data:v5 -> videos/chunk-000/<cam>/episode_*.mp4  (N eps x 3 cams)
+# The expanded dataset intended to fix the data-starved action head (supersedes v4 = 531 eps).
+# Output: /data/wam/datasets/encord_trossen_v6. Runs on a CPU node. Peak ~2x artifact size transient
+# on /data (download + merged copy); the build rmtree's its download at the end.
+#
+# Prereq: repo staged at /data/src/dreamzero-wam; wandb-api-key secret; ample free space on /data.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wam-encord-dataset-v6
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-data"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-data"}
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: nvidia.com/gpu.product, operator: DoesNotExist}   # CPU-only node
+                  - {key: kubernetes.io/arch, operator: In, values: [amd64]}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: build
+          image: python:3.12-slim
+          command: ["/bin/bash", "-exo", "pipefail", "-c"]
+          args:
+            - |
+              export HOME=/data/.home-amd64 PIP_CACHE_DIR=/data/.home-amd64/.pip TMPDIR=/data/.home-amd64/.tmp
+              export HF_HOME=/data/.hf WANDB_DIR=/data/.home-amd64/.wandb
+              export WAM_REPO_ROOT=/data/src/dreamzero-wam
+              mkdir -p $HOME $PIP_CACHE_DIR $TMPDIR $HF_HOME $WANDB_DIR
+              python -m pip install --no-cache-dir --quiet "wandb>=0.18.0" huggingface_hub pandas pyarrow numpy tqdm
+              cd $WAM_REPO_ROOT
+              python wam/artifacts/build_encord_dataset.py --out /data/wam/datasets/encord_trossen_v6
+              echo "=== v6 dataset built; verifying ==="
+              python - <<'PY'
+              import json
+              d=json.load(open("/data/wam/datasets/encord_trossen_v6/meta/info.json"))
+              print("total_episodes",d["total_episodes"],"total_frames",d["total_frames"],"fps",d["fps"],"tasks",d["total_tasks"])
+              assert d["fps"] and d["total_episodes"]>0, d
+              PY
+          envFrom: [{secretRef: {name: wandb-api-key}}]
+          env:
+            - {name: WANDB_ENTITY,  value: encord-wb-physical-ai}
+            - {name: WANDB_PROJECT, value: wam-finetune-webinar}
+            - {name: WAM_DATA_ROOT, value: /data/wam}
+            # LATEST artifacts (complementary halves): captions:v6 (labels+lang) + source-data:v5 (videos).
+            - {name: WAM_LABELS_ARTIFACT, value: "encord-wb-physical-ai/wam-finetune-webinar/encord-captions:v6"}
+            - {name: WAM_SOURCE_ARTIFACT, value: "encord-wb-physical-ai/wam-finetune-webinar/encord-source-data:v5"}
+            # WAM_MAX_EPISODES unset => all episodes.
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+          resources:
+            requests: {cpu: "8", memory: 32Gi}
+            limits:   {cpu: "16", memory: 96Gi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: dreamzero-data}}

@@ -373,6 +373,23 @@ def main() -> None:
     rank = dist.get_rank()
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    # Weave/W&B eval tracing — ON BY DEFAULT (opt out with WAM_EVAL_NO_WEAVE=1). Set
+    # WAM_EVAL_RESUME_RUN_ID=<run id> to attach the eval's weave trace + metrics to that
+    # (e.g. training) run; otherwise init_eval_tracing mints a fresh job_type=eval run.
+    # Reuses eval/isaaclab_arena_dreamzero/weave_eval.py (the weave-in-workspaces pattern).
+    _trace_run = None
+    if rank == 0 and os.environ.get("WAM_EVAL_NO_WEAVE") != "1":
+        try:
+            import sys as _sys
+            _eval_dir = os.path.dirname(os.path.abspath(__file__))  # .../dreamzero-wam/eval
+            if _eval_dir not in _sys.path:
+                _sys.path.insert(0, _eval_dir)
+            from isaaclab_arena_dreamzero.weave_eval import init_eval_tracing, finish_eval_tracing
+            _trace_run = init_eval_tracing()
+            globals()["_finish_eval_tracing"] = finish_eval_tracing
+        except Exception as _e:  # noqa: BLE001
+            print(f"[diag] weave tracing unavailable ({_e}); continuing without traces", flush=True)
+
     # Construct EXACTLY like the trossen server (trossen_policy_server.py:200-205).
     policy = GrootSimPolicy(
         embodiment_tag=EmbodimentTag("trossen"),
@@ -466,6 +483,59 @@ def main() -> None:
         return float(np.mean(rs)) if rs else float("nan")
     rn, rg = agg_ratio(pn), agg_ratio(pg)
     print(f"\n[diag] mean reach-joint std_ratio:  normal={rn:.2f}   gtcond={rg:.2f}", flush=True)
+
+    # --- Weave trace + W&B metrics (attaches to the resumed run when WAM_EVAL_RESUME_RUN_ID set) ---
+    if _trace_run is not None:
+        try:
+            import weave
+            import wandb
+            model_label = os.environ.get("WEAVE_MODEL_LABEL") or MODEL_DIR.rstrip("/").rsplit("/", 1)[-1]
+            task_label = task
+
+            def trossen_amplitude_eval():
+                """Traced op: per-joint predicted-vs-GT amplitude/correlation on a real episode.
+                Output is the full metrics dict (shows up as the op's return in the Weave trace)."""
+                pj = {}
+                for d in range(D):
+                    g = gt[:, d]
+                    gs, _psn, r_n, c_n = stats(g, pn[:, d])
+                    _, _psg, r_g, c_g = stats(g, pg[:, d])
+                    pj[names[d]] = {"gt_std": round(gs, 4), "nrm_ratio": round(r_n, 4),
+                                    "nrm_corr": round(c_n, 4), "gtc_ratio": round(r_g, 4),
+                                    "gtc_corr": round(c_g, 4)}
+                arm = [nm for nm in names if nm.startswith("Lj") and pj[nm]["gt_std"] > 0.1]
+                den = sum(pj[nm]["gt_std"] for nm in arm) or 1.0
+                wamp = sum(pj[nm]["gt_std"] * pj[nm]["nrm_ratio"] for nm in arm) / den
+                wcor = sum(pj[nm]["gt_std"] * pj[nm]["nrm_corr"] for nm in arm) / den
+                return {"task": task_label, "model": model_label, "episode": int(ep), "n_rows": int(K),
+                        "mean_reach_std_ratio_normal": round(rn, 4), "mean_reach_std_ratio_gtcond": round(rg, 4),
+                        "wamp_arm_normal": round(wamp, 4), "wcorr_arm_normal": round(wcor, 4),
+                        "per_joint": pj}
+
+            metrics = weave.op(trossen_amplitude_eval)()          # runs + records a Weave trace
+            wandb.run.summary.update({
+                "eval/task": task_label, "eval/model": model_label,
+                "eval/mean_reach_std_ratio_normal": rn, "eval/mean_reach_std_ratio_gtcond": rg,
+                "eval/wamp_arm_normal": metrics["wamp_arm_normal"],
+                "eval/wcorr_arm_normal": metrics["wcorr_arm_normal"]})
+            try:
+                from weave import EvaluationLogger
+                from isaaclab_arena_dreamzero.weave_eval import sanitize_label
+                el = EvaluationLogger(model=sanitize_label(model_label, "model"),
+                                      dataset=sanitize_label("trossen_amp_" + task_label, "task"),
+                                      name=sanitize_label("amp_" + model_label, "amp"))
+                p = el.log_prediction(inputs={"task": task_label, "episode": int(ep)}, output=metrics)
+                p.log_score(scorer="wamp_arm_normal", score=float(metrics["wamp_arm_normal"]))
+                p.log_score(scorer="wcorr_arm_normal", score=float(metrics["wcorr_arm_normal"]))
+                p.finish()
+                el.log_summary({"mean_reach_std_ratio_normal": float(rn)})
+            except Exception as _e:  # noqa: BLE001
+                print(f"[diag] EvaluationLogger skipped: {_e}", flush=True)
+            print("[diag] weave trace + eval metrics logged to the run", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[diag] weave logging failed: {_e}", flush=True)
+        finally:
+            globals().get("_finish_eval_tracing", lambda r: None)(_trace_run)
 
     print("\n[diag] READ: gtcond std_ratio >> normal and ~1 => coupling/AR-drift is the cause; "
           "gtcond still <<1 => action head under-fit.", flush=True)
