@@ -246,7 +246,9 @@ def main() -> None:
             art = os.environ.get("LORA_ARTIFACT", "")
             if ":" in art:
                 model_label = f"dreamzero-trossen-lora:{art.rsplit(':', 1)[-1]}"
-            eval_logger = EvaluationLogger(model=model_label, dataset=f"trossen-sim-{job.name}", name=job.name)
+            # weave >=0.51 requires model/dataset/name to be identifiers ([A-Za-z0-9_], leading letter/_).
+            _san = lambda s: (__import__("re").sub(r"[^0-9A-Za-z_]", "_", str(s)) or "x")
+            eval_logger = EvaluationLogger(model=_san(model_label), dataset=_san(f"trossen_sim_{job.name}"), name=_san(job.name))
 
             print(f"[run_trossen_eval] {num_episodes} episodes, max_steps={max_steps}, model={model_label}", flush=True)
             for ep in range(num_episodes):
