@@ -52,6 +52,13 @@ spec:
             - {name: WAM_DOMAIN_RAND, value: "0"}
             # Raised work-table pose calibrated via debug_cameras.py (objects reachable + cameras framed).
             - {name: WAM_TABLE_X, value: "0.20"}
+            # Object placement tuned against the render so the yellow can sits clearly in the
+            # exterior-cam view (the bin showed at -y, so the can at +y was off-frame) + separated
+            # from the blue bin so it isn't occluded. Iterate these against the rendered frame.
+            - {name: WAM_CUBE_X, value: "0.55"}
+            - {name: WAM_CUBE_Y, value: "0.15"}
+            - {name: WAM_BOWL_X, value: "0.80"}
+            - {name: WAM_BOWL_Y, value: "-0.30"}
             - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
             - {name: PYTHONUNBUFFERED, value: "1"}
           resources:
