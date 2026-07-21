@@ -76,7 +76,9 @@ def main() -> None:
     enable_cameras_if_required(cfg, args_cli)
     job = JobManager(cfg["jobs"]).all_jobs[0]
     instruction = job.language_instruction
-    pick_name = job.arena_env_args.get("pick_up_object", "corn_can_hope_robolab")
+    # arena_env_args on the job is Arena's CLI arg LIST (JobManager-converted); read the
+    # pick object name from the RAW jobs config dict instead.
+    pick_name = cfg["jobs"][0].get("arena_env_args", {}).get("pick_up_object", "corn_can_hope_robolab")
 
     import statistics as st
     seed_traj = None
