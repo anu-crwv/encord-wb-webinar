@@ -43,6 +43,8 @@ LANG_KEYS = [
 ]
 LANGUAGE_INSTRUCTION_PATTERN = re.compile(r"^language instruction(?:\s*([123]))?$", re.IGNORECASE)
 LANGUAGE_INSTRUCTION_VALUE_PATTERN = re.compile(r"^language_instruction(?:_([123]))?$", re.IGNORECASE)
+SOURCE_URI_METADATA_KEYS = ("source_uri", "s3_uri", "source_s3_uri", "objectUrl", "object_url")
+PARQUET_URI_METADATA_KEYS = ("source_parquet_uri", "parquet_uri")
 REQUIRED_PARQUET_COLUMNS = ["action", "observation.state", "timestamp", "frame_index"]
 TROSSEN_STATE_ACTION_SPLITS = [
     ("left_joint_pos", 0, 7),
@@ -283,36 +285,31 @@ def read_dataset_metadata(client: Any, dataset_hash: str) -> dict[str, dict[str,
 
 
 def source_s3_uri(client_meta: dict[str, Any]) -> Any:
-    return (
-        client_meta.get("source_uri")
-        or client_meta.get("s3_uri")
-        or client_meta.get("source_s3_uri")
-        or client_meta.get("objectUrl")
-        or client_meta.get("object_url")
-    )
+    return next((client_meta.get(key) for key in SOURCE_URI_METADATA_KEYS if client_meta.get(key)), None)
 
 
-def source_bucket(client_meta: dict[str, Any]) -> str | None:
-    uri = source_s3_uri(client_meta)
-    if not uri:
+def direct_source_parquet_uri(client_meta: dict[str, Any]) -> str | None:
+    value = next((client_meta.get(key) for key in PARQUET_URI_METADATA_KEYS if client_meta.get(key)), None)
+    return str(value) if value else None
+
+
+def source_parquet_uri_from_parts(source_uri_value: Any, episode_path: str | None, episode_id: str | None) -> str | None:
+    if not source_uri_value or not episode_path or not episode_id:
         return None
     try:
-        bucket, _ = parse_s3_uri(str(uri))
+        bucket, _ = parse_s3_uri(str(source_uri_value))
     except ValueError:
         return None
-    return bucket
+    return f"s3://{bucket}/{episode_path.rstrip('/')}/data/chunk-000/{episode_id}.parquet"
 
 
 def source_parquet_uri(client_meta: dict[str, Any], fallback_title: Any = None) -> str | None:
-    for key in ["parquet_uri", "source_parquet_uri"]:
-        if client_meta.get(key):
-            return str(client_meta[key])
+    direct_uri = direct_source_parquet_uri(client_meta)
+    if direct_uri:
+        return direct_uri
     episode_path = episode_path_from_metadata(client_meta, fallback_title)
     episode_id = str(client_meta.get("episode_id") or episode_id_from_path(episode_path) or "")
-    bucket = source_bucket(client_meta)
-    if not episode_path or not episode_id or not bucket:
-        return None
-    return f"s3://{bucket}/{episode_path.rstrip('/')}/data/chunk-000/{episode_id}.parquet"
+    return source_parquet_uri_from_parts(source_s3_uri(client_meta), episode_path, episode_id)
 
 
 def source_info_uri(source_uri: str | None, episode_path: str | None) -> str | None:
@@ -339,6 +336,84 @@ def source_dataset_items(metadata_by_hash: dict[str, dict[str, Any]]) -> list[di
             "client_metadata": client_meta,
         })
     return items
+
+
+def source_item_resolution_sort_key(item: dict[str, Any]) -> tuple[int, str, str]:
+    camera_rank = {"cam_high": 0, "cam_left_wrist": 1, "cam_right_wrist": 2}
+    camera_name = str(item.get("camera_name") or (item.get("client_metadata") or {}).get("camera_name") or "")
+    return (
+        camera_rank.get(camera_name, 99),
+        camera_name,
+        str(item.get("artifact_path") or item.get("source_uri") or ""),
+    )
+
+
+def source_item_s3_uri(item: dict[str, Any]) -> str | None:
+    source_uri_value = item.get("source_uri") or source_s3_uri(item.get("client_metadata") or {})
+    return str(source_uri_value) if source_uri_value else None
+
+
+def resolved_source_metadata_from_source_episode(source_episode: dict[str, Any]) -> dict[str, Any]:
+    """Resolve episode source metadata from the source artifact's per-camera records."""
+    source_items = source_episode.get("source_video_items") or []
+    for item in sorted(source_items, key=source_item_resolution_sort_key):
+        if not isinstance(item, dict):
+            continue
+        client_meta = item.get("client_metadata") or {}
+        source_uri_value = source_item_s3_uri(item)
+        episode_path = episode_path_from_metadata(
+            client_meta,
+            item.get("artifact_path") or item.get("source_uri"),
+        )
+        episode_id = str(client_meta.get("episode_id") or episode_id_from_path(episode_path) or "")
+
+        direct_parquet_uri = direct_source_parquet_uri(client_meta)
+        if direct_parquet_uri:
+            parquet_uri = direct_parquet_uri
+            parquet_resolution = "source_artifact_metadata"
+        else:
+            parquet_uri = source_parquet_uri_from_parts(source_uri_value, episode_path, episode_id)
+            parquet_resolution = "source_artifact_derived" if parquet_uri else None
+
+        if source_uri_value or parquet_uri or episode_path:
+            return {
+                "source_s3_uri": source_uri_value,
+                "source_parquet_uri": parquet_uri,
+                "source_parquet_uri_resolution": parquet_resolution,
+                "episode_path": episode_path,
+                "episode_id": episode_id,
+                "source_item": item,
+            }
+
+    return {}
+
+
+def resolve_source_s3_uri(row: dict[str, Any], source_episode: dict[str, Any]) -> tuple[str | None, str | None]:
+    if row.get("source_s3_uri"):
+        return str(row["source_s3_uri"]), "label_metadata"
+    resolved = resolved_source_metadata_from_source_episode(source_episode)
+    source_uri_value = resolved.get("source_s3_uri")
+    return (str(source_uri_value), "source_artifact_metadata") if source_uri_value else (None, None)
+
+
+def resolve_source_parquet_uri(row: dict[str, Any], source_episode: dict[str, Any]) -> tuple[str | None, str | None]:
+    if row.get("source_parquet_uri"):
+        return str(row["source_parquet_uri"]), "label_metadata"
+    resolved = resolved_source_metadata_from_source_episode(source_episode)
+    parquet_uri = resolved.get("source_parquet_uri")
+    resolution = resolved.get("source_parquet_uri_resolution")
+    return (str(parquet_uri), str(resolution)) if parquet_uri and resolution else (None, None)
+
+
+def resolve_source_info_uri(row: dict[str, Any], source_episode: dict[str, Any]) -> str | None:
+    source_uri_value, _ = resolve_source_s3_uri(row, source_episode)
+    episode_path = row.get("episode_path") or resolved_source_metadata_from_source_episode(source_episode).get("episode_path")
+    info_uri = source_info_uri(source_uri_value, episode_path)
+    if info_uri:
+        return info_uri
+
+    parquet_uri, _ = resolve_source_parquet_uri(row, source_episode)
+    return source_info_uri(parquet_uri, episode_path)
 
 
 def language_instruction_index(value: Any) -> int | None:
@@ -988,15 +1063,19 @@ def export_label_overlay(
     seen_parquets: dict[str, str] = {}
     ambiguous_label_keys: set[str] = set()
     skipped: list[dict[str, Any]] = []
+    resolved_preview_rows: list[dict[str, Any]] = []
+    preview_by_row_id: dict[int, dict[str, Any]] = {}
 
     for row in rows:
+        preview_row = dict(row)
+        preview_by_row_id[id(row)] = preview_row
+        resolved_preview_rows.append(preview_row)
+
+    for row in rows:
+        preview_row = preview_by_row_id[id(row)]
         caption = row.get("language_instruction")
-        parquet_uri = row.get("source_parquet_uri")
         if not caption:
             skipped.append(skipped_label(row, "missing_language_instruction"))
-            continue
-        if not parquet_uri:
-            skipped.append(skipped_label(row, "missing_source_parquet_uri"))
             continue
         match_key = row_match_key(row)
         if not match_key:
@@ -1014,7 +1093,27 @@ def export_label_overlay(
             skipped.append(skipped_label(row, "missing_source_episode_match", match_key))
             continue
 
-        signature = duplicate_label_signature(row)
+        parquet_uri, parquet_resolution = resolve_source_parquet_uri(row, source_episode)
+        if not parquet_uri:
+            skipped.append(skipped_label(row, "missing_resolved_source_parquet_uri", match_key))
+            continue
+
+        source_uri, source_uri_resolution = resolve_source_s3_uri(row, source_episode)
+        resolved_row = {
+            **row,
+            "source_s3_uri": source_uri or row.get("source_s3_uri"),
+            "source_parquet_uri": parquet_uri,
+            "source_parquet_uri_resolution": parquet_resolution,
+            "source_s3_uri_resolution": source_uri_resolution,
+        }
+        preview_row.update({
+            "source_s3_uri": resolved_row.get("source_s3_uri"),
+            "source_parquet_uri": parquet_uri,
+            "source_parquet_uri_resolution": parquet_resolution,
+            "source_s3_uri_resolution": source_uri_resolution,
+        })
+
+        signature = duplicate_label_signature(resolved_row)
         existing = selected_by_key.get(match_key)
         if existing is not None:
             if selected_signatures.get(match_key) == signature:
@@ -1038,7 +1137,7 @@ def export_label_overlay(
         seen_parquets[parquet_key] = match_key
 
         episode_index = int(source_episode["episode_index"])
-        selected_by_key[match_key] = (episode_index, row, source_episode)
+        selected_by_key[match_key] = (episode_index, resolved_row, source_episode)
         selected_signatures[match_key] = signature
 
     selected = sorted(selected_by_key.values(), key=lambda item: item[0])
@@ -1056,6 +1155,7 @@ def export_label_overlay(
     total_frames = 0
     parquet_cache_hits = 0
     parquet_cache_downloads = 0
+    parquet_uri_resolution_counts: dict[str, int] = {}
 
     typer.echo(f"Using shared S3 object cache at {S3_CACHE_ROOT}")
     for index, (episode_index, row, source_episode) in enumerate(selected, start=1):
@@ -1065,6 +1165,8 @@ def export_label_overlay(
             task_rows.append({"task_index": task_id, "task": caption})
 
         parquet_uri = str(row["source_parquet_uri"])
+        parquet_resolution = str(row.get("source_parquet_uri_resolution") or "unknown")
+        parquet_uri_resolution_counts[parquet_resolution] = parquet_uri_resolution_counts.get(parquet_resolution, 0) + 1
         table, downloaded = download_parquet_table(client_s3, parquet_uri)
         if downloaded:
             parquet_cache_downloads += 1
@@ -1081,7 +1183,7 @@ def export_label_overlay(
         )
         if first_table is None:
             first_table = table
-            info_uri = source_info_uri(row.get("source_s3_uri"), row.get("episode_path"))
+            info_uri = resolve_source_info_uri(row, source_episode)
             first_source_info = read_s3_json(client_s3, info_uri) if info_uri else None
 
         output_path = (
@@ -1107,6 +1209,9 @@ def export_label_overlay(
             "episode_id": row.get("episode_id"),
             "episode_path": row.get("episode_path"),
             "source_parquet_uri": parquet_uri,
+            "source_parquet_uri_resolution": row.get("source_parquet_uri_resolution"),
+            "source_s3_uri": row.get("source_s3_uri"),
+            "source_s3_uri_resolution": row.get("source_s3_uri_resolution"),
         }
         episode_row.update({
             "source_dataset_episode_index": source_episode.get("episode_index"),
@@ -1162,6 +1267,7 @@ def export_label_overlay(
         "stats_columns": stats_cols,
         "relative_stats_keys": RELATIVE_STATS_KEYS,
         "relative_stats_action_horizon": RELATIVE_STATS_ACTION_HORIZON,
+        "source_parquet_uri_resolution_counts": parquet_uri_resolution_counts,
         "source_match_key_count": len(source_by_key),
         "ambiguous_source_episode_path_count": len(ambiguous_source_keys),
         "ambiguous_label_episode_path_count": len(ambiguous_label_keys),
@@ -1171,8 +1277,12 @@ def export_label_overlay(
         "parquet_cache_download_count": parquet_cache_downloads,
         "episodes": sorted(manifest_rows, key=lambda item: item["episode_index"]),
         "skipped_labels": skipped,
+        "_resolved_preview_rows": resolved_preview_rows,
     }
-    write_json(output_dir / "label_export_manifest.json", summary)
+    write_json(
+        output_dir / "label_export_manifest.json",
+        {key: value for key, value in summary.items() if not key.startswith("_")},
+    )
     return summary
 
 
@@ -1243,6 +1353,7 @@ def log_to_wandb(
             "camera_name",
             "source_s3_uri",
             "source_parquet_uri",
+            "source_parquet_uri_resolution",
         ])
         for row in json.loads(preview_path.read_text()):
             table.add_data(
@@ -1255,6 +1366,7 @@ def log_to_wandb(
                 row.get("camera_name"),
                 row.get("source_s3_uri"),
                 row.get("source_parquet_uri"),
+                row.get("source_parquet_uri_resolution"),
             )
         run.log({table_name: table})
         typer.echo("Logged preview table.")
@@ -1319,6 +1431,7 @@ def main(
         source_manifest=source_manifest,
         limit=limit,
     )
+    resolved_preview_rows = label_summary.pop("_resolved_preview_rows", rows)
     label_summary.update({
         "encord_project_hash": project_hash,
         "encord_project_title": project.title,
@@ -1336,7 +1449,7 @@ def main(
     write_json(output_dir / "source_dataset_items.json", dataset_items)
     write_json(output_dir / "encord_labels.json", {"export_info": source_manifest_local, "label_rows": labels})
     write_json(output_dir / "encord_data_metadata.json", data_metadata)
-    write_json(output_dir / "label_preview_rows.json", rows)
+    write_json(output_dir / "label_preview_rows.json", resolved_preview_rows)
     typer.echo("Wrote local export files.")
 
     lineage = log_to_wandb(
