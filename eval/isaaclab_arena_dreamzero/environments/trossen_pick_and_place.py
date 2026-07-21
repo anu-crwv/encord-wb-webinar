@@ -95,6 +95,28 @@ class TrossenPickAndPlaceEnvironment(ExampleEnvironmentBase):
         pick_up_object.set_initial_pose(Pose(position_xyz=(_CUBE_X, _CUBE_Y, _OBJ_Z)))
         destination_location.set_initial_pose(Pose(position_xyz=(_BOWL_X, _BOWL_Y, _OBJ_Z)))
 
+        # Domain-match refinements (grounded in the real Encord frames): (1) shrink the Arena
+        # sorting bin (registered at scale 4x2) toward a shallow blue tray; (2) tint the pick
+        # object bright yellow like the real Amazon-Basics batteries. Both env-gated + guarded so
+        # a spawn-cfg quirk can't break the render.
+        try:
+            destination_location.scale = (
+                float(os.environ.get("WAM_BIN_SX", "1.3")),
+                float(os.environ.get("WAM_BIN_SY", "1.1")),
+                float(os.environ.get("WAM_BIN_SZ", "0.6")),
+            )
+        except Exception as _e:  # noqa: BLE001
+            print(f"[trossen_env] bin scale override skipped: {_e}", flush=True)
+        if os.environ.get("WAM_OBJ_YELLOW", "1") == "1":
+            try:
+                pick_up_object.spawn_cfg_addon = {
+                    "visual_material": sim_utils.PreviewSurfaceCfg(
+                        diffuse_color=(0.95, 0.72, 0.05), roughness=0.5, metallic=0.0),
+                    "visual_material_path": "material",
+                }
+            except Exception as _e:  # noqa: BLE001
+                print(f"[trossen_env] object yellow tint skipped: {_e}", flush=True)
+
         # Table anchor kept so any extra clutter objects can still be placed via On().
         table_reference = ObjectReference(
             name="table",
