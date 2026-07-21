@@ -37,10 +37,10 @@ spec:
             # low table the cams overshoot. Objects sit ~0.25m below the rest-pose gripper.
             - {name: WAM_TABLE_X, value: "0.20"}
             - {name: WAM_TABLE_Z, value: "0.96"}
-            - {name: WAM_CUBE_X, value: "0.70"}
-            - {name: WAM_CUBE_Y, value: "0.10"}
-            - {name: WAM_BOWL_X, value: "0.70"}
-            - {name: WAM_BOWL_Y, value: "-0.16"}
+            - {name: WAM_CUBE_X, value: "0.55"}
+            - {name: WAM_CUBE_Y, value: "0.15"}
+            - {name: WAM_BOWL_X, value: "0.80"}
+            - {name: WAM_BOWL_Y, value: "-0.30"}
             - {name: WAM_OBJ_Z, value: "1.06"}
             - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
             - {name: PYTHONUNBUFFERED, value: "1"}

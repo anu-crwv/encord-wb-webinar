@@ -20,6 +20,19 @@ side-by-side comparison convention the DROID eval used.
 from __future__ import annotations
 
 import os
+import re
+
+
+def sanitize_label(s: str, fallback: str = "model") -> str:
+    """Weave's EvaluationLogger (>=0.51) validates model/dataset/scorer names as identifiers:
+    must start with a letter/underscore and contain only [A-Za-z0-9_]. Checkpoint refs like
+    'dreamzero-trossen-lora-v6:ckpt-8000' have '-'/':' and fail — sanitize to underscores."""
+    s = re.sub(r"[^0-9A-Za-z_]", "_", str(s or "").strip())
+    if not s:
+        s = fallback
+    if not (s[0].isalpha() or s[0] == "_"):
+        s = "_" + s
+    return s
 
 
 def _model_label() -> str:
@@ -62,9 +75,14 @@ def init_eval_tracing():
 
     # W&B run FIRST, then weave.init() with the same project -> traces auto-associate
     # with the active run (the "inside wandb.init()" mapping the workspace doc describes).
+    # WAM_EVAL_RESUME_RUN_ID: resume INTO an existing run (e.g. a training run) so the eval's
+    # weave traces + summary attach to that experiment, instead of minting a fresh eval run.
+    resume_id = os.environ.get("WAM_EVAL_RESUME_RUN_ID", "").strip()
     run = wandb.init(
         entity=entity,
         project=project,
+        id=resume_id or None,
+        resume=("allow" if resume_id else None),
         job_type="eval",
         name=os.environ.get("WAM_EVAL_RUN_NAME") or None,
         tags=_eval_tags(),
@@ -75,6 +93,8 @@ def init_eval_tracing():
             "jobs_config": os.environ.get("EVAL_JOBS_CONFIG", ""),
         },
     )
+    if resume_id:
+        print(f"[weave_eval] resumed INTO run id={resume_id}", flush=True)
     # Lineage: record the fine-tuned model artifact as an INPUT to this eval run, so
     # W&B shows dataset -> training run -> checkpoint artifact -> eval run.
     art = os.environ.get("LORA_ARTIFACT", "").strip()

@@ -803,7 +803,12 @@ class WANPolicyHead(ActionHead):
                     timestep_action.flatten(0, 1),
                 ).unflatten(0, (noise_action.shape[0], noise_action.shape[1])).to(self._device)
                 weighted_action_loss = weight_action.mean()
-                loss = weighted_dynamics_loss + weighted_action_loss
+                # WAM_ACTION_LOSS_WEIGHT up-weights the action term vs the (equal-weighted) video
+                # loss. The action head under-shoots amplitude (regresses toward the mean) partly
+                # because the action loss is easily "satisfied"; weighting it >1 pushes the model to
+                # fit full-amplitude actions. Default 1.0 = unchanged.
+                _action_w = float(os.environ.get("WAM_ACTION_LOSS_WEIGHT", "1.0"))
+                loss = weighted_dynamics_loss + _action_w * weighted_action_loss
             else:
                 weighted_action_loss = torch.tensor(0.0, device=self._device)
                 loss = weighted_dynamics_loss

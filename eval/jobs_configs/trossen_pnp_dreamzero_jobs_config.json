@@ -8,17 +8,16 @@
   ],
   "jobs": [
     {
-      "name": "trossen_pnp_dreamzero_cube_in_bowl",
+      "name": "trossen_pnp_dreamzero_yellow_pickplace",
       "arena_env_args": {
         "enable_cameras": true,
         "environment": "trossen_pick_and_place",
         "embodiment": "trossen_mobile_ai",
-        "pick_up_object": "rubiks_cube_hot3d_robolab",
-        "destination_location": "bowl_ycb_robolab",
-        "hdr": "home_office_robolab"
+        "pick_up_object": "corn_can_hope_robolab",
+        "destination_location": "blue_sorting_bin"
       },
-      "num_episodes": 10,
-      "language_instruction": "Pick up the cube and place it in the bowl.",
+      "num_episodes": 2,
+      "language_instruction": "pick up the yellow cylindrical object and place it in the blue tray",
       "policy_type": "isaaclab_arena_dreamzero.policy.dreamzero_remote_policy.DreamZeroRemotePolicy",
       "policy_config_dict": {
         "embodiment_adapter": "trossen",

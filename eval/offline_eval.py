@@ -259,7 +259,9 @@ def main() -> None:
     art = os.environ.get("LORA_ARTIFACT", "")
     if ":" in art:
         model_label = f"dreamzero-trossen-lora:{art.rsplit(':', 1)[-1]}"
-    el = EvaluationLogger(model=model_label, dataset="trossen-offline", name="trossen_offline")
+    # weave >=0.51 requires model/dataset/name to be identifiers ([A-Za-z0-9_], leading letter/_).
+    _san = lambda s: (__import__("re").sub(r"[^0-9A-Za-z_]", "_", str(s)) or "x")
+    el = EvaluationLogger(model=_san(model_label), dataset="trossen_offline", name="trossen_offline")
 
     try:
         mses = []

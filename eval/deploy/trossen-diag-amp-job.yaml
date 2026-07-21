@@ -1,0 +1,81 @@
+# Weave-traced per-joint amplitude eval (std_ratio + correlation of predicted vs GT actions on a real
+# episode) — the honest action-head quality metric. Runs eval/diag_gt_cond.py on an RTX GPU.
+#
+# Weave tracing is ON BY DEFAULT (opt out with WAM_EVAL_NO_WEAVE=1): the eval opens a W&B run + weave.init
+# (same project) so the @weave.op trace + eval/* summary metrics + an EvaluationLogger leaderboard entry
+# land in the workspace. Set WAM_EVAL_RESUME_RUN_ID to RESUME INTO an existing (e.g. training) run so the
+# traces attach to that experiment; leave it blank to mint a fresh job_type=eval run.
+#
+# Inject at apply (sed): __TAG__ (job suffix), __MODELDIR__ (checkpoint dir), __DATA__ (LeRobot dataset
+# root — the eval EPISODE comes from here; keep it fixed across runs you want to compare), __TASK__
+# (DIAG_TASK substring), __RUNID__ (WAM_EVAL_RESUME_RUN_ID; may be empty), __LABEL__ (WEAVE_MODEL_LABEL).
+# Convenience launcher: scripts/eval/run_amp_diag.sh.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trossen-diag-__TAG__
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "DZ-diag"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "DZ-diag"}
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        nvidia.com/gpu.product: NVIDIA-RTX-PRO-6000-Blackwell-Server-Edition
+      tolerations:
+        - {key: is_gpu, value: "true", operator: Equal, effect: PreferNoSchedule}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: diag
+          image: nvcr.io/nvidia/pytorch:25.04-py3
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-exo", "pipefail", "-c"]
+          args:
+            - |
+              export HOME=/data/.home-trossen-server TMPDIR=/data/.home-trossen-server/.tmp HF_HOME=/data/.hf_home
+              mkdir -p "$TMPDIR" "$HF_HOME"
+              export WAM_REPO_ROOT=/data/src/dreamzero-wam DREAMZERO_UPSTREAM=/data/dreamzero-src
+              export PYTHONPATH="$WAM_REPO_ROOT:$DREAMZERO_UPSTREAM:${PYTHONPATH:-}"
+              export ATTENTION_BACKEND=TE PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+              cd "$WAM_REPO_ROOT"
+              nvidia-smi -L || true
+              # weave/wandb for tracing (installs cleanly in this image; persisted in HOME/.local)
+              python -m pip install --user --quiet "weave" "wandb>=0.18" 2>&1 | tail -3 || echo "pip weave/wandb warn"
+              python -c "import openpi_client, groot, torch; print('imports OK', torch.__version__)"
+              python -c "import weave, wandb; print('weave', weave.__version__, 'wandb', wandb.__version__)" || echo "WEAVE IMPORT FAILED (traces skipped)"
+              torchrun --nproc_per_node=1 --standalone eval/diag_gt_cond.py
+              echo "=== diag __TAG__ done ==="
+          envFrom: [{secretRef: {name: wandb-api-key}}]
+          env:
+            - {name: MODEL_DIR,        value: "__MODELDIR__"}
+            - {name: WAM_TROSSEN_DATA, value: "__DATA__"}
+            - {name: DIAG_TASK,        value: "__TASK__"}
+            # Weave tracing → resume INTO the training run (traces+metrics attach to that experiment).
+            - {name: WAM_EVAL_RESUME_RUN_ID, value: "__RUNID__"}
+            - {name: WEAVE_MODEL_LABEL, value: "__LABEL__"}
+            - {name: WANDB_ENTITY,     value: "encord-wb-physical-ai"}
+            - {name: WANDB_PROJECT,    value: "wam-finetune-webinar"}
+            - {name: WEAVE_PROJECT,    value: "wam-finetune-webinar"}
+            - {name: DZ_ACTION_CFG_SCALE, value: "5.0"}
+            - {name: NUM_DIT_STEPS,    value: "16"}
+            - {name: DIAG_MAX_CHUNKS,  value: "16"}
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: TORCH_COMPILE_DISABLE, value: "1"}
+            - {name: TORCHDYNAMO_DISABLE, value: "1"}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+          resources:
+            requests: {cpu: "8", memory: 96Gi, nvidia.com/gpu: "1"}
+            limits:   {cpu: "32", memory: 256Gi, nvidia.com/gpu: "1"}
+          volumeMounts:
+            - {name: data,        mountPath: /data}
+            - {name: checkpoints, mountPath: /checkpoints}
+            - {name: dshm,        mountPath: /dev/shm}
+      volumes:
+        - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+        - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}
+        - {name: dshm,        emptyDir: {medium: Memory, sizeLimit: 32Gi}}

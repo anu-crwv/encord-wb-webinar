@@ -54,6 +54,14 @@ def _ep_index(path: str):
 def fetch(artifact, dest: str, max_eps: int | None):
     """Download an artifact to dest. If max_eps is set, fetch only meta/* + the first max_eps
     episodes' files (per-file via get_path) — avoids pulling the full (34GB) source-data for a smoke."""
+    # Reuse a complete prior download: the 150GB source-data must not be re-materialized on a retry
+    # (a 2nd copy + wandb cache would exceed the PVC). If dest already holds the artifact's dataset
+    # dir, skip the download (run.use_artifact upstream already recorded lineage). Delete dest to force
+    # a fresh pull. The per-episode validation later catches any missing files from a partial download.
+    ds = os.path.join(dest, "dataset")
+    if os.path.isdir(ds) and os.listdir(ds):
+        print(f"[encord]   reusing existing download at {dest} (skip re-download)")
+        return dest
     if max_eps is None:
         return artifact.download(root=dest)
     n = 0
@@ -83,10 +91,8 @@ def main() -> None:
     out = Path(args.out)
     if out.exists():
         shutil.rmtree(out)
-    (out / "data" / "chunk-000").mkdir(parents=True)
     (out / "meta").mkdir(parents=True)
-    for k in VIDEO_KEYS:
-        (out / "videos" / "chunk-000" / f"observation.images.{k}").mkdir(parents=True)
+    # data/ + videos/ chunk dirs are created on demand in the merge loop (multi-chunk aware).
 
     run = wandb.init(entity=os.environ.get("WANDB_ENTITY", "encord-wb-physical-ai"),
                      project=os.environ.get("WANDB_PROJECT", "wam-finetune-webinar"),
@@ -101,14 +107,33 @@ def main() -> None:
     all_eps = [json.loads(l) for l in open(lab_ds / "meta" / "episodes.jsonl") if l.strip()]
     episodes = all_eps[:N] if N else all_eps
 
+    # LeRobot shards episodes into chunks of `chunks_size` (episode i -> chunk i//chunks_size).
+    # v4 (531 eps) fit in chunk-000; v6 (1363 eps) spans chunk-000 + chunk-001, so read/write the
+    # correct chunk per episode instead of hardcoding chunk-000.
+    lab_info = json.loads((lab_ds / "meta" / "info.json").read_text())
+    CHUNK = int(lab_info.get("chunks_size") or 1000)
+    def _chunk(i): return f"chunk-{i // CHUNK:03d}"
+    chunks_used = set()
+
     # 1. Copy per-episode parquet (labels) + 3 videos (source-data) for the selected episodes only.
     for e in episodes:
         i = e["episode_index"]
-        shutil.copy2(lab_ds / f"data/chunk-000/episode_{i:06d}.parquet",
-                     out / f"data/chunk-000/episode_{i:06d}.parquet")
+        ch = _chunk(i); chunks_used.add(i // CHUNK)
+        (out / "data" / ch).mkdir(parents=True, exist_ok=True)
+        shutil.copy2(lab_ds / f"data/{ch}/episode_{i:06d}.parquet",
+                     out / f"data/{ch}/episode_{i:06d}.parquet")
         for k in VIDEO_KEYS:
-            shutil.copy2(src_ds / f"videos/chunk-000/observation.images.{k}/episode_{i:06d}.mp4",
-                         out / f"videos/chunk-000/observation.images.{k}/episode_{i:06d}.mp4")
+            (out / "videos" / ch / f"observation.images.{k}").mkdir(parents=True, exist_ok=True)
+            _sv = src_ds / f"videos/{ch}/observation.images.{k}/episode_{i:06d}.mp4"
+            _dv = out / f"videos/{ch}/observation.images.{k}/episode_{i:06d}.mp4"
+            # HARDLINK the videos instead of copying: source-data:v5 is ~161GB, and a download + full
+            # copy would blow the PVC. dl and out are both on /data (same fs), so os.link is free; the
+            # end-of-run rmtree(dl) drops the scratch link while the dataset link keeps the inode alive.
+            # Fallback to copy2 if hardlinking is unsupported (e.g. cross-device).
+            try:
+                os.link(_sv, _dv)
+            except OSError:
+                shutil.copy2(_sv, _dv)
     # meta: episodes (selected) + tasks (full, for task_index lookups)
     with open(out / "meta" / "episodes.jsonl", "w") as f:
         for e in episodes:
@@ -117,9 +142,7 @@ def main() -> None:
 
     # 3. Build a self-consistent info.json: state/action features (from labels) + the 3 video keys,
     #    correct fps/totals, DROID-style path templates.
-    lab_info = json.loads((lab_ds / "meta" / "info.json").read_text())
-    feats = lab_info.get("features", {})
-    feats = lab_info.get("features", {})
+    feats = lab_info.get("features", {})  # lab_info + CHUNK read above (multi-chunk aware)
     info = {
         "codebase_version": "v2.0",
         "robot_type": args.embodiment_tag,
@@ -127,9 +150,12 @@ def main() -> None:
         "total_frames": int(sum(e["length"] for e in episodes)),
         "total_tasks": len({json.loads(l)["task_index"] for l in open(out / "meta" / "tasks.jsonl") if l.strip()}),
         "total_videos": len(episodes) * len(VIDEO_KEYS),
-        "total_chunks": 1,
-        "chunks_size": lab_info.get("chunks_size", 1000),
-        "fps": lab_info.get("fps", 30),
+        "total_chunks": len(chunks_used),
+        "chunks_size": CHUNK,
+        # `or 30`: some captions artifacts (e.g. encord-captions:v3) ship info.json with fps=None
+        # (key present but null), so .get(...,30) returns None; coerce to the Trossen 30fps. The
+        # video loader (lerobot.py) needs a numeric top-level fps for timestamp->frame mapping.
+        "fps": (lab_info.get("fps") or 30),
         "splits": {"train": f"0:{len(episodes)}"},
         "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
         "video_path": "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4",
@@ -149,11 +175,11 @@ def main() -> None:
     # 4. Validate: every episode has its parquet + 3 videos.
     miss = []
     for e in episodes:
-        i = e["episode_index"]
-        if not (out / f"data/chunk-000/episode_{i:06d}.parquet").exists():
+        i = e["episode_index"]; ch = _chunk(i)
+        if not (out / f"data/{ch}/episode_{i:06d}.parquet").exists():
             miss.append(f"parquet {i}")
         for k in VIDEO_KEYS:
-            if not (out / f"videos/chunk-000/observation.images.{k}/episode_{i:06d}.mp4").exists():
+            if not (out / f"videos/{ch}/observation.images.{k}/episode_{i:06d}.mp4").exists():
                 miss.append(f"video {k}/{i}")
     if miss:
         sys.exit(f"[encord] missing files: {miss[:6]}")
@@ -187,6 +213,10 @@ def main() -> None:
     print(f"[encord] restored tasks.jsonl ({ntasks} tasks) + {len(episodes)} episodes")
     print("[encord] modality summary: state=%s action=%s video=%s annotation=%s" % (
         list(mod["state"]), list(mod["action"]), list(mod["video"]), list(mod["annotation"])))
+    # Free the ~44GB artifact download (merge + converter are done; keeping it stalls the PVC —
+    # this is what left a 33GB orphaned encord_dl behind after the previous build).
+    shutil.rmtree(dl, ignore_errors=True)
+    print(f"[encord] cleaned up download scratch {dl}")
     run.finish()
     print("[encord] done.")
 
