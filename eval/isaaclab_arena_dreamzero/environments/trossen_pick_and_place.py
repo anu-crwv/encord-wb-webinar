@@ -110,9 +110,17 @@ class TrossenPickAndPlaceEnvironment(ExampleEnvironmentBase):
         for obj in additional_table_objects:
             obj.add_relation(On(table_reference))
 
-        # Lighting + (optional) HDR background for domain randomization.
+        # Lighting. Domain-MATCH to the real Encord scene: warm, even indoor light (~4500K
+        # fluorescent) rather than a bright neutral studio HDR — the real frames the model
+        # trained on are warm-white. color_temperature is env-tunable while iterating on the
+        # render. An HDR is only added if explicitly requested (domain-randomization path);
+        # for the matched demo we leave it off so the fixed warm dome dominates.
         light = self.asset_registry.get_asset_by_name("light")(
-            spawner_cfg=sim_utils.DomeLightCfg(intensity=args_cli.light_intensity),
+            spawner_cfg=sim_utils.DomeLightCfg(
+                intensity=args_cli.light_intensity,
+                color_temperature=float(os.environ.get("WAM_LIGHT_TEMP", "4500")),
+                enable_color_temperature=True,
+            ),
         )
         if getattr(args_cli, "hdr", None):
             light.add_hdr(self.hdr_registry.get_hdr_by_name(args_cli.hdr)())

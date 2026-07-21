@@ -8,17 +8,16 @@
   ],
   "jobs": [
     {
-      "name": "trossen_pnp_dreamzero_coffee_in_cup",
+      "name": "trossen_pnp_dreamzero_yellow_pickplace",
       "arena_env_args": {
         "enable_cameras": true,
         "environment": "trossen_pick_and_place",
         "embodiment": "trossen_mobile_ai",
-        "pick_up_object": "coffee_can_ycb_robolab",
-        "destination_location": "mug_ycb_robolab",
-        "hdr": "photo_studio_robolab"
+        "pick_up_object": "corn_can_hope_robolab",
+        "destination_location": "blue_sorting_bin"
       },
-      "num_episodes": 3,
-      "language_instruction": "pour the coffee into the cup",
+      "num_episodes": 2,
+      "language_instruction": "pick up the yellow cylindrical object and place it in the blue tray",
       "policy_type": "isaaclab_arena_dreamzero.policy.dreamzero_remote_policy.DreamZeroRemotePolicy",
       "policy_config_dict": {
         "embodiment_adapter": "trossen",
