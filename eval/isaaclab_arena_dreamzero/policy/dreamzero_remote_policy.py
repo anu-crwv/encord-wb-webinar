@@ -94,6 +94,15 @@ class DreamZeroRemotePolicy(PolicyBase):
         super().__init__(config)
         self._adapter = embodiment_adapter
         self._open_loop_horizon = int(config.open_loop_horizon)
+        # Env override so the action-chunk execution horizon can be swept WITHOUT editing
+        # the jobs config (Tier-0.1b chunk-scheduling sweep: execute 5 vs the full 24-step
+        # chunk before re-planning). The model is trained on a 24-step horizon and the
+        # server returns all 24 rows; deploying with horizon=5 discards steps 6..23.
+        _env_h = os.environ.get("WAM_OPEN_LOOP_HORIZON")
+        if _env_h:
+            self._open_loop_horizon = int(_env_h)
+            print(f"[DreamZeroRemotePolicy] open_loop_horizon overridden by "
+                  f"WAM_OPEN_LOOP_HORIZON={self._open_loop_horizon}")
         assert self._open_loop_horizon > 0, "open_loop_horizon must be positive"
         self.device = config.policy_device
 
