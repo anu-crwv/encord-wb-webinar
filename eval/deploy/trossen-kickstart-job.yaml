@@ -5,7 +5,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: trossen-kickstart
+  name: trossen-kicksweep
   namespace: dreamzero
   labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
 spec:
@@ -36,9 +36,10 @@ spec:
             - {name: DZ_PORT, value: "8001"}
             # Core confirming set by default: baseline(N=0) + scripted_toward N=8 + ep35_gt N=8.
             # Override for the sweep, e.g. WAM_KICK_CONFIGS='[["scripted_toward",4,0],...]'.
-            - {name: WAM_KICK_CONFIGS, value: '[["scripted_toward",0,0],["scripted_toward",8,0],["ep35_gt",8,0]]'}
-            - {name: WAM_KICK_EPISODES, value: "2"}
-            - {name: WAM_EVAL_MAX_STEPS, value: "120"}
+            - {name: WAM_KICK_CONFIGS, value: '[["scripted_toward",0,0],["ep35_gt",8,0],["ep35_gt",16,0],["ep35_gt",24,0],["scripted_pregrasp",8,0],["scripted_neutral",8,0],["ep35_gt",16,4],["ep35_gt",16,8]]'}
+            - {name: WAM_KICK_EPISODES, value: "5"}
+            - {name: WAM_EVAL_MAX_STEPS, value: "130"}
+            - {name: WAM_RESET_JITTER, value: "0.05"}
             - {name: WAM_SEED_ACTIONS, value: "/data/wam/arladder/ep35_seed_actions.npy"}
             - {name: WAM_DOMAIN_RAND, value: "0"}
             - {name: WAM_TABLE_X, value: "0.20"}

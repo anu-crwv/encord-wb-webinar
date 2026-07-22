@@ -44,6 +44,8 @@ from isaaclab_arena.utils.isaaclab_utils.simulation_app import SimulationAppCont
 
 MAX_STEPS = int(os.environ.get("WAM_EVAL_MAX_STEPS", "150"))
 N_EPISODES = int(os.environ.get("WAM_KICK_EPISODES", "3"))
+RESET_JITTER = float(os.environ.get("WAM_RESET_JITTER", "0.05"))  # per-episode rest-pose arm jitter (rad) -> varied resets
+GRASP_DIST = float(os.environ.get("WAM_GRASP_DIST", "0.08"))       # gripper->object dist (m) counted as a reach/pre-grasp
 SEED_ACTIONS_PATH = os.environ.get("WAM_SEED_ACTIONS", "/data/wam/arladder/ep35_seed_actions.npy")
 # List of [seed_mode, N_seed, K_hold] configs run SEQUENTIALLY in one job (one Arena setup,
 # one warm server -> no cross-job server contention). Default = core confirming set.
@@ -119,18 +121,28 @@ def main() -> None:
             if mode == "scripted_toward":
                 a[1] = cur16[1] + 0.9 * frac      # Lj1 shoulder down
                 a[2] = cur16[2] + 0.4 * frac      # Lj2 elbow
+            elif mode == "scripted_pregrasp":
+                # Aimed descent toward a pre-grasp over the object: absolute ramp from the
+                # real rest pose to a shoulder/elbow config that lowers the gripper to the
+                # table (calibrated vs the GT-replay reach). min-dist metric shows how close.
+                a[1] = 1.047 + (1.95 - 1.047) * frac
+                a[2] = 0.523 + (0.95 - 0.523) * frac
             elif mode == "scripted_away":
                 a[1] = cur16[1] - 0.5 * frac      # raise up
             elif mode == "scripted_neutral":
                 a[0] = cur16[0] + 0.25 * math.sin(2 * math.pi * (t / max(N, 1)) * 2.0)  # yaw wiggle
             return a
 
-        def seed_pose(obs):
+        def seed_pose(obs, ep):
             jp_t = (robot.data.joint_pos if isinstance(robot.data.joint_pos, torch.Tensor)
                     else __import__("warp").to_torch(robot.data.joint_pos)).clone()
+            rng = np.random.default_rng(1000 + ep)
             for nm, val in _REST_JOINT_POS.items():
                 if nm in names:
-                    jp_t[:, names.index(nm)] = float(val)
+                    j = float(val)
+                    if RESET_JITTER > 0 and "joint_" in nm:  # jitter arm joints -> varied resets
+                        j += float(rng.uniform(-RESET_JITTER, RESET_JITTER))
+                    jp_t[:, names.index(nm)] = j
             robot.write_joint_state_to_sim(jp_t, torch.zeros_like(jp_t))
             robot.set_joint_position_target(jp_t)
             robot.write_data_to_sim()
@@ -142,9 +154,11 @@ def main() -> None:
             for ep in range(N_EPISODES):
                 policy.reset()
                 obs, _ = env.reset()
-                obs = seed_pose(obs)
+                obs = seed_pose(obs, ep)
                 d0 = float(np.linalg.norm(grip_xyz() - obj_xyz()))
                 d_end_seed = d_end_hold = d_5policy = d0
+                min_dist = d0            # closest gripper->object during the POLICY phase
+                success = False          # env success termination (object on destination) during policy
                 cos_toward = []
                 prev_g = grip_xyz()
                 d_final = d0
@@ -165,7 +179,11 @@ def main() -> None:
                     g = grip_xyz()
                     d = float(np.linalg.norm(g - obj_xyz()))
                     d_final = d
+                    done = bool(term.any()) if hasattr(term, "any") else bool(term)
                     if phase == "policy":
+                        min_dist = min(min_dist, d)
+                        if done:
+                            success = True
                         ov, gv = obj_xyz() - prev_g, g - prev_g
                         nv = np.linalg.norm(gv) * np.linalg.norm(ov)
                         if nv > 1e-6:
@@ -177,25 +195,29 @@ def main() -> None:
                         d_end_hold = d
                     if t == N + K + 4:
                         d_5policy = d
-                    done = bool(term.any()) if hasattr(term, "any") else bool(term)
                     if (bool(trunc.any()) if hasattr(trunc, "any") else bool(trunc)) or done:
                         break
                 red_seed = d0 - d_end_seed
                 red_pol_total = d_end_hold - d_final
                 red_pol5 = d_end_hold - d_5policy
                 mean_cos = float(np.mean(cos_toward)) if cos_toward else float("nan")
-                rows.append(dict(red_seed=red_seed, red_pol_total=red_pol_total,
-                                 red_pol5=red_pol5, mean_cos=mean_cos, d0=d0, d_final=d_final))
+                reached = bool(min_dist <= GRASP_DIST)
+                rows.append(dict(red_seed=red_seed, red_pol_total=red_pol_total, red_pol5=red_pol5,
+                                 mean_cos=mean_cos, d0=d0, d_final=d_final, min_dist=min_dist,
+                                 reached=reached, success=success))
                 print(f"[kick] {mode} N={N} K={K} ep{ep}: d0={d0:.3f}->seed {d_end_seed:.3f}"
-                      f"->hold {d_end_hold:.3f}->final {d_final:.3f} | seed_red={red_seed:+.3f} "
-                      f"POST-HANDOVER={red_pol_total:+.3f} (first5={red_pol5:+.3f}) cos={mean_cos:+.2f}", flush=True)
+                      f"->hold {d_end_hold:.3f}->final {d_final:.3f} min={min_dist:.3f} | seed_red={red_seed:+.3f} "
+                      f"POST-HANDOVER={red_pol_total:+.3f} cos={mean_cos:+.2f} reached={reached} success={success}", flush=True)
             pol = [r["red_pol_total"] for r in rows]
             cos = [r["mean_cos"] for r in rows if r["mean_cos"] == r["mean_cos"]]
             return dict(mode=mode, N=N, K=K, n=len(rows),
                         seed_red=st.mean([r["red_seed"] for r in rows]) if rows else float("nan"),
                         post=st.mean(pol) if pol else float("nan"),
                         pos=sum(1 for x in pol if x > 0.02), tot=len(pol),
-                        cos=st.mean(cos) if cos else float("nan"))
+                        cos=st.mean(cos) if cos else float("nan"),
+                        min_dist=st.mean([r["min_dist"] for r in rows]) if rows else float("nan"),
+                        reached=sum(1 for r in rows if r["reached"]),
+                        success=sum(1 for r in rows if r["success"]))
 
         summaries = []
         for mode, N, K in CONFIGS:
@@ -203,10 +225,12 @@ def main() -> None:
             summaries.append(run_config(mode, int(N), int(K)))
 
         print("\n[kick] ================= KICKSTART SUMMARY =================", flush=True)
-        print(f"  {'seed':16s} {'N':>3s} {'K':>3s} {'seed_red':>9s} {'POST_HANDOVER':>14s} {'pos':>6s} {'cos':>6s}", flush=True)
+        print(f"  {'seed':16s} {'N':>3s} {'K':>3s} {'seed_red':>9s} {'POST_HANDOVER':>14s} {'pos':>6s} "
+              f"{'cos':>6s} {'min_dist':>9s} {'reach':>6s} {'succ':>5s}", flush=True)
         for s in summaries:
             print(f"  {s['mode']:16s} {s['N']:>3d} {s['K']:>3d} {s['seed_red']:>+9.3f} "
-                  f"{s['post']:>+14.3f} {s['pos']:>3d}/{s['tot']:<2d} {s['cos']:>+6.2f}", flush=True)
+                  f"{s['post']:>+14.3f} {s['pos']:>3d}/{s['tot']:<2d} {s['cos']:>+6.2f} "
+                  f"{s['min_dist']:>9.3f} {s['reached']:>3d}/{s['tot']:<2d} {s['success']:>2d}/{s['tot']:<2d}", flush=True)
         best = max((s for s in summaries), key=lambda s: (s['post'] if s['post'] == s['post'] else -9), default=None)
         if best and best["post"] > 0.02:
             print(f"\n[kick] VERDICT: BOOTSTRAP WORKS — seed={best['mode']} N={best['N']} K={best['K']} gives "
