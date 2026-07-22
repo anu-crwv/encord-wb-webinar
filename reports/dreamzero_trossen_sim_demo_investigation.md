@@ -72,10 +72,12 @@ The remaining blocker (closed-loop covariate shift + sim visual/dynamics OOD) is
 2. **Real closed-loop / recovery data (DAgger-style)** if the demo must be real-robot:
    collect states the policy actually visits + correct actions (randomized starts,
    overshoot/missed-grasp recovery). A small pilot first.
-3. **Finish the step-filter retrain (3000) + a longer/higher-rank variant** — low
-   confidence it fixes closed loop (offline is already good at 2000; the issue isn't
-   offline quality), but the step-filter is a legitimate data fix worth keeping in the
-   recipe. Cheap to complete.
+3. **A longer/higher-rank retrain is NOT the lever.** Confirmed on the final artifact
+   `dreamzero-trossen-lora:v7` (checkpoint-3000, train_loss 0.098): no-seed closed-loop
+   still 0-reach, drifts away (post-handover −0.02 to −0.07, min-dist ~0.32) — identical
+   to ckpt-2000 and to the fully-cooked v6@8000. Training length/quality does not move the
+   closed-loop result. The step-filter remains a legitimate data fix to keep in the recipe,
+   but it is not the fix for the demo.
 
 **Realistic demo reframe (if a demo is needed before the above lands):** demo what the
 model *does* do well — its **real-data action prediction + world-model dream** (offline,
