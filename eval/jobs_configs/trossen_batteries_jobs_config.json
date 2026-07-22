@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "Task-matched eval scene #2: BATTERIES -> tray. yellow_block_basic_robolab stands in for the yellow",
+    "Amazon-Basics batteries in the real data (yellow, block-shaped). Caption copied from a training",
+    "instruction. Verify yellow_block spawn Z/scale + camera framing with a debug render before the scored",
+    "eval (it's a new asset vs the corn_can the sim was tuned on). remote_host = the v8 server."
+  ],
+  "jobs": [
+    {
+      "name": "trossen_batteries_v8",
+      "arena_env_args": {
+        "enable_cameras": true,
+        "environment": "trossen_pick_and_place",
+        "embodiment": "trossen_mobile_ai",
+        "pick_up_object": "yellow_block_basic_robolab",
+        "destination_location": "blue_sorting_bin"
+      },
+      "num_episodes": 8,
+      "language_instruction": "Pick up the yellow batteries from the table and place them into the tray.",
+      "policy_type": "isaaclab_arena_dreamzero.policy.dreamzero_remote_policy.DreamZeroRemotePolicy",
+      "policy_config_dict": {
+        "embodiment_adapter": "trossen",
+        "policy_device": "cuda:0",
+        "remote_host": "dreamzero-trossen-inference-rt",
+        "remote_port": 8001,
+        "open_loop_horizon": 5
+      }
+    }
+  ]
+}
