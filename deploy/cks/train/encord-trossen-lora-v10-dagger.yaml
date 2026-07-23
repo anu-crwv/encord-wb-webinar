@@ -1,0 +1,79 @@
+# v10 DAgger round-0 co-train — LoRA on real(v8) + CLEAN scripted-expert sim demos (correct object
+# grounding + expert actions on sim pixels). The principled fix for the closed-loop covariate-shift /
+# domain gap that left v6/v7/v8/v9 at 0-reach. Cloned from the proven v8/v9 recipe; only dataset dir,
+# run id, HOME, lineage/tags change. GH200 (arm64), single-node. Reads the local v10 dir directly.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wam-encord-trossen-lora-v10
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-train"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 259200
+  template:
+    metadata:
+      labels: {app: wam-train, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-train"}
+    spec:
+      restartPolicy: Never
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      nodeSelector:
+        kubernetes.io/arch: arm64
+        nvidia.com/gpu.product: NVIDIA-GH200-480GB
+      tolerations:
+        - {key: is_gpu, value: "true", operator: Equal, effect: PreferNoSchedule}
+      containers:
+        - name: train
+          image: nvcr.io/nvidia/pytorch:25.04-py3
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-exo", "pipefail", "-c"]
+          args:
+            - |
+              export HOME=/data/.home-gh200-1 PIP_CACHE_DIR=/data/.home-gh200-1/.pip
+              export TMPDIR=/data/.home-gh200-1/.tmp HF_HOME=/data/.hf
+              mkdir -p $HOME $PIP_CACHE_DIR $TMPDIR $HF_HOME
+              export WAM_REPO_ROOT=/data/src/dreamzero-wam
+              export PYTHONPATH=$WAM_REPO_ROOT:${PYTHONPATH:-}
+              export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+              export NNODES=1 NUM_GPUS=1
+              export TRITON_CACHE_DIR=$TMPDIR/triton; mkdir -p $TRITON_CACHE_DIR
+              cd $WAM_REPO_ROOT
+              python -m pip install --no-cache-dir --quiet --user -r requirements-train.txt
+              DS_NVTX=$(find $HOME/.local/lib -path '*/deepspeed/utils/nvtx.py' 2>/dev/null | head -1)
+              if [ -n "$DS_NVTX" ]; then sed -i 's/^enable_nvtx = True/enable_nvtx = False/' "$DS_NVTX"; echo "patched $DS_NVTX"; fi
+              echo "trossen DAgger CO-TRAIN run_id=$WANDB_RUN_ID data=$DATA_CONFIG local=$WAM_DATASET_LOCAL_DIR out=$OUTPUT_DIR steps=$MAX_STEPS"
+              test -f "$WAM_DATASET_LOCAL_DIR/meta/info.json" || { echo "FATAL: v10 dataset not assembled at $WAM_DATASET_LOCAL_DIR"; exit 1; }
+              bash scripts/train/encord_trossen.sh
+          env:
+            - {name: WANDB_ENTITY,  value: encord-wb-physical-ai}
+            - {name: WANDB_PROJECT, value: wam-finetune-webinar}
+            - {name: WAM_REGISTRY_ORG, value: encord-wb-webinar}
+            - {name: WANDB_RUN_ID,  value: v10dagger0723}
+            - {name: OUTPUT_DIR,    value: /checkpoints/wam/runs/encord_trossen_lora_v10dagger0723}
+            - {name: MAX_STEPS,     value: "6000"}
+            - {name: SAVE_STEPS,    value: "1000"}
+            - {name: TRAIN_ARCHITECTURE, value: lora}
+            - {name: LEARNING_RATE, value: "1e-4"}
+            - {name: PER_DEVICE_BATCH_SIZE, value: "1"}
+            - {name: DEEPSPEED,     value: configs/deepspeed/zero3_offload.json}
+            - {name: USE_AGIBOT_INIT, value: "0"}
+            - {name: WAM_TRAIN_TAGS, value: "encord,trossen,lora,v10-dagger,real+sim-demos,dagger-r0,step-filter"}
+            - {name: DATA_CONFIG,   value: dreamzero/trossen_relative}
+            - {name: DATA_ROOT_KEY, value: trossen_data_root}
+            - {name: WAM_DATASET_LOCAL_DIR, value: /data/wam/datasets/encord_trossen_v10}
+            - {name: WAM_DATASET_SOURCE_ARTIFACTS, value: "encord-wb-physical-ai/wam-finetune-webinar/encord-source-data:v5,encord-wb-physical-ai/wam-finetune-webinar/encord-captions:v6,encord-wb-physical-ai/wam-finetune-webinar/trossen-dagger-demos:latest"}
+            - {name: WAM_CKPT_ARTIFACT_NAME, value: dreamzero-trossen-lora}
+            - {name: VIDEO_BACKEND, value: ""}
+          envFrom: [{secretRef: {name: wandb-api-key}}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+          resources:
+            requests: {cpu: "16", memory: 200Gi, nvidia.com/gpu: "1"}
+            limits:   {cpu: "64", memory: 460Gi, nvidia.com/gpu: "1"}
+          volumeMounts:
+            - {name: data,        mountPath: /data}
+            - {name: checkpoints, mountPath: /checkpoints}
+            - {name: dshm,        mountPath: /dev/shm}
+      volumes:
+        - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+        - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}
+        - {name: dshm,        emptyDir: {medium: Memory, sizeLimit: 64Gi}}
