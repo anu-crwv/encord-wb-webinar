@@ -22,6 +22,19 @@ from __future__ import annotations
 import os
 import re
 
+# A @weave.op whose OUTPUT carries the VideoFileClip: weave serializes moviepy clips to inline
+# video media only when they flow through an op call (what run_trossen_eval.py relies on) — passing
+# a clip straight into EvaluationLogger.log_prediction does NOT render it. Defined at import (guarded);
+# it traces when called after weave.init().
+try:
+    import weave as _weave
+
+    @_weave.op(name="sim_rollout")
+    def _rollout_trace(inputs, output):
+        return output
+except Exception:  # weave not importable in this context -> no tracing (guarded everywhere)
+    _rollout_trace = None
+
 
 def sanitize_label(s: str, fallback: str = "model") -> str:
     """Weave's EvaluationLogger (>=0.51) validates model/dataset/scorer names as identifiers:
@@ -158,7 +171,9 @@ class WeaveEvalLogger:
             return None
 
     def log_episode(self, inputs: dict, output: dict, scores: dict, video_path: str | None = None) -> None:
-        """One leaderboard prediction: inputs + output (with optional rollout video) + scores."""
+        """One leaderboard prediction: inputs + output (+ rollout video) + scores. The video is
+        attached two ways for robustness: (1) through the _rollout_trace @weave.op so it renders on
+        the weave call, and (2) as a wandb.Video on the run so it shows in the W&B media panel."""
         if self.el is None:
             return
         try:
@@ -166,10 +181,22 @@ class WeaveEvalLogger:
             clip = self._clip(video_path)
             if clip is not None:
                 out["episode_video"] = clip
-            pred = self.el.log_prediction(inputs=inputs, output=out)
+            # (1) trace through a @weave.op so weave serializes the clip as inline video media
+            traced = _rollout_trace(inputs=inputs, output=out) if (_rollout_trace is not None and clip is not None) else out
+            pred = self.el.log_prediction(inputs=inputs, output=traced)
             for k, v in scores.items():
                 pred.log_score(scorer=sanitize_label(k, "score"), score=v)
             pred.finish()
+            # (2) guaranteed-render fallback: log the mp4 to the W&B run media panel
+            if video_path and self.run is not None:
+                try:
+                    import os as _os
+                    import wandb
+                    if _os.path.exists(video_path):
+                        self.run.log({f"rollout/{sanitize_label(str(inputs.get('task', 'ep')))}":
+                                      wandb.Video(video_path, fps=15, format="mp4")})
+                except Exception as e:  # noqa: BLE001
+                    print(f"[weave_eval] wandb.Video log failed: {e}", flush=True)
             self._n += 1
         except Exception as e:  # noqa: BLE001
             print(f"[weave_eval] log_episode failed: {e}", flush=True)

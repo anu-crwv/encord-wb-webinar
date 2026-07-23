@@ -230,7 +230,7 @@ def main() -> None:
             # laying it on its side keeps it low (~radius height) and reliably graspable. WAM_LAY_OBJECT=0
             # to keep the native upright pose.
             if obj is not None:
-                rng = np.random.default_rng(4000 + ep)
+                rng = np.random.default_rng(int(os.environ.get("WAM_EP_SEED_BASE", "4000")) + ep)
                 p = _as_torch(obj.data.root_pos_w).clone()
                 if RESET_JITTER > 0:
                     p[0, 0] += float(rng.uniform(-RESET_JITTER, RESET_JITTER))
@@ -246,6 +246,8 @@ def main() -> None:
                 step_action(rest16)
 
         results = []
+        n_written = 0     # dense index of WRITTEN (successful) demo episodes
+        written = []
         for ep in range(N_EPISODES):
             reset_scene(ep)
             o0 = obj_xyz(); p0, _ = ee_pose()
@@ -322,8 +324,10 @@ def main() -> None:
             print(f"[expert] ep{ep}: reach={reached}(min {min_dist:.3f}m) PICK={picked}(max_lift {max_lift:+.3f}m) "
                   f"place={placed}(to_bin {to_bin:.3f}m, end_lift {lifted:+.3f}m) steps={t}", flush=True)
 
-            if OUT and rec_state:
-                _write_episode(OUT, ep, rec_state, rec_action, capt, instruction, imageio)
+            # Write only SUCCESSFUL picks as demos (clean BC data), densely indexed.
+            if OUT and rec_state and picked:
+                _write_episode(OUT, n_written, rec_state, rec_action, capt, instruction, imageio)
+                written.append(int(n_written)); n_written += 1
 
             # Log this episode to Weave (leaderboard prediction + rollout video).
             if WEAVE_ON:
@@ -350,6 +354,10 @@ def main() -> None:
         npl = sum(1 for r in results if r["placed"])
         print(f"[expert] ===== DONE: reach {nr}/{len(results)}, PICK {npick}/{len(results)}, place {npl}/{len(results)}; "
               f"mean min_ee_obj={np.mean([r['min_dist'] for r in results]):.3f}m =====", flush=True)
+        if OUT and written:
+            with open(f"{OUT}/demos.json", "w") as f:
+                json.dump({"written": written, "n": len(written), "task": job.name, "instruction": instruction}, f)
+            print(f"[expert] wrote {len(written)}/{len(results)} successful demo episodes -> {OUT}", flush=True)
         if WEAVE_ON:
             n = max(1, len(results))
             wlog.log_summary({"episodes": len(results), "reach_rate": nr / n, "pick_rate": npick / n,
