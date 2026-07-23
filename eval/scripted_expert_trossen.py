@@ -44,14 +44,17 @@ from isaaclab_arena.utils.isaaclab_utils.simulation_app import SimulationAppCont
 
 N_EPISODES = int(os.environ.get("WAM_EXPERT_EPISODES", "4"))
 OUT = os.environ.get("WAM_EXPERT_OUT", "")
-MAX_STEPS = int(os.environ.get("WAM_MAX_STEPS", "220"))
-GRIP_OPEN = float(os.environ.get("WAM_GRIP_OPEN", "0.044"))
+MAX_STEPS = int(os.environ.get("WAM_MAX_STEPS", "400"))
+GRIP_OPEN = float(os.environ.get("WAM_GRIP_OPEN", "0.05"))
 GRIP_CLOSED = float(os.environ.get("WAM_GRIP_CLOSED", "0.0"))
 PREGRASP_Z = float(os.environ.get("WAM_PREGRASP_Z", "0.12"))
-GRASP_Z = float(os.environ.get("WAM_GRASP_Z", "0.02"))
-LIFT_Z = float(os.environ.get("WAM_LIFT_Z", "0.22"))
-IK_GAIN = float(os.environ.get("WAM_IK_GAIN", "0.6"))
+GRASP_Z = float(os.environ.get("WAM_GRASP_Z", "0.0"))    # grasp AT the settled object center (secure)
+LIFT_Z = float(os.environ.get("WAM_LIFT_Z", "0.14"))     # modest lift (reachable + keeps grasp)
+SETTLE_STEPS = int(os.environ.get("WAM_SETTLE_STEPS", "45"))  # let the object fall+settle before targeting
+IK_GAIN = float(os.environ.get("WAM_IK_GAIN", "0.4"))
 IK_DAMP = float(os.environ.get("WAM_IK_DAMP", "0.05"))
+USE_ORIENT = os.environ.get("WAM_IK_ORIENT", "0") == "1"  # position-only IK by default (orient term
+# with a wrong DOWN_QUAT was contorting the arm + overshooting; bent rest pose is ~downward already)
 RESET_JITTER = float(os.environ.get("WAM_RESET_JITTER", "0.04"))
 POS_TOL = float(os.environ.get("WAM_POS_TOL", "0.03"))
 CHUNK = 1000
@@ -100,6 +103,14 @@ def main() -> None:
     print(f"[expert] pick={pick_name} dest={dest_name} out={OUT or '(eval-only)'} "
           f"grip open/closed={GRIP_OPEN}/{GRIP_CLOSED}", flush=True)
 
+    # Weave/W&B results tracing (same convention as run_trossen_eval.py): a leaderboard entry
+    # under model='scripted_ik_expert' so the positive-control results render in the workspace.
+    from isaaclab_arena_dreamzero.weave_eval import WeaveEvalLogger
+    wlog = WeaveEvalLogger(model_label=os.environ.get("WEAVE_MODEL", "scripted_ik_expert"),
+                           task_name=job.name)
+    WEAVE_ON = wlog.el is not None
+    WV_DIR = os.environ.get("WAM_EVAL_VIDEO_DIR", "/data/wam/eval_videos/scripted_expert")
+
     def _np(x):
         if isinstance(x, torch.Tensor):
             return x.detach().cpu().numpy()
@@ -140,16 +151,22 @@ def main() -> None:
         lgrip_dof = names.index(LEFT_GRIPPER_JOINT)
         rarm_dof = [names.index(j) for j in RIGHT_ARM_JOINTS]
         rgrip_dof = names.index(RIGHT_GRIPPER_JOINT)
-        ee_name = "follower_left_link_6" if "follower_left_link_6" in bnames else \
-                  next(b for b in bnames if b.startswith("follower_left") and b.endswith("link_6"))
-        ee_bidx = bnames.index(ee_name)
-        # action-vector slot order (see embodiments/trossen.py TrossenActionsCfg): the env applies
-        # action terms in declaration order -> [Larm0..5, Lgrip, Rarm0..5, Rgrip, base0..1].
-        # We build the 16-vec in that same order.
-        print(f"[expert] ee_body={ee_name}(idx {ee_bidx}) larm_dof={larm_dof} lgrip_dof={lgrip_dof}", flush=True)
+        # Control the GRIPPER FINGERTIP (TCP), not the wrist link_6: the fingers extend ~0.12 m
+        # past link_6, so IK-ing link_6 to the object jams the fingers into the table (first test:
+        # link_6 stalled 0.164 m above). TCP = mean of the left-arm gripper finger bodies.
+        grip_bodies = [b for b in bnames if b.startswith("follower_left") and "gripper" in b]
+        if not grip_bodies:  # fallback to wrist
+            grip_bodies = [next(b for b in bnames if b.startswith("follower_left") and b.endswith("link_6"))]
+        tcp_bidx = [bnames.index(b) for b in grip_bodies]
+        print(f"[expert] TCP bodies={grip_bodies} idx={tcp_bidx} larm_dof={larm_dof} lgrip_dof={lgrip_dof}", flush=True)
         _Jshape = _np(robot.root_physx_view.get_jacobians()).shape
         print(f"[expert] jacobian shape={_Jshape} nbodies={len(bnames)} ndof={len(names)} "
-              f"(fixed-base -> expect rows={len(bnames)-1}); ee jrow={ee_bidx-1}", flush=True)
+              f"(fixed-base -> expect rows={len(bnames)-1})", flush=True)
+        try:
+            _lim = _np(robot.data.joint_pos_limits)[0][lgrip_dof]
+            print(f"[expert] left gripper carriage limits={np.round(_lim,4)} (open={GRIP_OPEN} closed={GRIP_CLOSED})", flush=True)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[expert] gripper-limit probe skipped: {_e}", flush=True)
 
         n_dof = len(names)
         rest16 = np.zeros(16, dtype=np.float32)
@@ -161,25 +178,32 @@ def main() -> None:
         rest16[13] = _REST_JOINT_POS[RIGHT_GRIPPER_JOINT]
 
         def ee_pose():
-            p = _np(robot.data.body_pos_w)[0][ee_bidx].astype(float)
-            q = _np(robot.data.body_quat_w)[0][ee_bidx].astype(float)
+            """TCP position = mean of the gripper finger bodies; orientation from the first."""
+            bp = _np(robot.data.body_pos_w)[0]
+            p = bp[tcp_bidx].mean(axis=0).astype(float)
+            q = _np(robot.data.body_quat_w)[0][tcp_bidx[0]].astype(float)
             return p, q
 
         def left_jacobian():
-            """6x6 jacobian of the left EE w.r.t. the 6 left-arm DOFs (fixed base -> body row = idx-1)."""
-            J = _np(robot.root_physx_view.get_jacobians())  # [N, nbodies_j, 6, ndof]
-            jrow = ee_bidx - 1  # fixed root: base excluded from jacobian body rows
-            Jb = J[0, jrow]     # [6, ndof]
+            """6x6 position/orientation jacobian of the TCP w.r.t. the 6 left-arm DOFs
+            (fixed base -> jacobian body row = body index - 1). Mean over finger bodies."""
+            J = _np(robot.root_physx_view.get_jacobians())  # [N, nbodies-1, 6, ndof]
+            Jb = np.mean([J[0, b - 1] for b in tcp_bidx], axis=0)  # [6, ndof]
             return Jb[:, larm_dof]  # [6, 6]
 
         def ik_step(cur_larm: np.ndarray, tgt_pos: np.ndarray, tgt_quat: np.ndarray) -> np.ndarray:
             p, q = ee_pose()
             perr = tgt_pos - p
-            oerr = _q_err(q, tgt_quat)
-            err = np.concatenate([perr, oerr])  # 6
-            J = left_jacobian()                  # 6x6
-            JT = J.T
-            dq = JT @ np.linalg.inv(J @ JT + (IK_DAMP ** 2) * np.eye(6)) @ err
+            J = left_jacobian()                  # 6x6 (pos rows 0:3, orient rows 3:6)
+            if USE_ORIENT:
+                err = np.concatenate([perr, _q_err(q, tgt_quat)])  # 6
+                Ju = J
+            else:
+                err = perr           # 3 — position-only: let orientation float
+                Ju = J[0:3, :]       # 3x6
+            JT = Ju.T
+            dq = JT @ np.linalg.inv(Ju @ JT + (IK_DAMP ** 2) * np.eye(Ju.shape[0])) @ err
+            dq = np.clip(dq, -0.2, 0.2)  # per-step joint-delta cap -> smooth, no overshoot
             return cur_larm + IK_GAIN * dq
 
         def build_action(larm_tgt: np.ndarray, grip: float) -> np.ndarray:
@@ -210,7 +234,9 @@ def main() -> None:
                 q = _as_torch(obj.data.root_quat_w).clone()
                 obj.write_root_pose_to_sim(torch.cat([p, q], dim=-1))
                 obj.write_data_to_sim()
-            for _ in range(3):
+            # let the object fall + settle on the table BEFORE we read its pose for waypoints,
+            # else we target the spawn height (~0.05 m too high) and the fingers miss/knock it.
+            for _ in range(SETTLE_STEPS):
                 step_action(rest16)
 
         results = []
@@ -222,17 +248,23 @@ def main() -> None:
             # waypoint list: (target_xyz, grip, min_hold_steps, name)
             wps = [
                 (pick + [0, 0, PREGRASP_Z], GRIP_OPEN, 6, "pregrasp"),
-                (pick + [0, 0, GRASP_Z],    GRIP_OPEN, 6, "descend"),
-                (pick + [0, 0, GRASP_Z],    GRIP_CLOSED, 12, "grasp"),
-                (pick + [0, 0, LIFT_Z],     GRIP_CLOSED, 8, "lift"),
-                (place + [0, 0, LIFT_Z],    GRIP_CLOSED, 10, "carry"),
-                (place + [0, 0, PREGRASP_Z], GRIP_CLOSED, 6, "over_bin"),
+                (pick + [0, 0, GRASP_Z],    GRIP_OPEN, 8, "descend"),
+                (pick + [0, 0, GRASP_Z],    GRIP_CLOSED, 22, "grasp"),   # longer hold -> secure grip
+                (pick + [0, 0, LIFT_Z],     GRIP_CLOSED, 10, "lift"),
+                (place + [0, 0, LIFT_Z],    GRIP_CLOSED, 12, "carry"),
+                (place + [0, 0, PREGRASP_Z], GRIP_CLOSED, 8, "over_bin"),
                 (place + [0, 0, PREGRASP_Z], GRIP_OPEN, 8, "release"),
             ]
+            if ep == 0:
+                tcp0, _ = ee_pose()
+                print(f"[expert] ep0 GEOM: tcp_rest={np.round(tcp0,3)} object={np.round(pick,3)} "
+                      f"bin={np.round(place,3)} tcp->obj={np.linalg.norm(tcp0-pick):.3f}m", flush=True)
             capt = {c: [] for c in CAMS}
+            cap_ex = []  # exterior-cam frames for the Weave rollout video
             rec_state, rec_action = [], []
             t = 0
             min_dist = 1e9
+            max_obj_z = -1e9
             for (tp, grip, hold, nm) in wps:
                 tp = np.asarray(tp, dtype=np.float64)
                 held = 0
@@ -241,39 +273,82 @@ def main() -> None:
                     tgt = ik_step(larm, tp, DOWN_QUAT)
                     a16 = build_action(tgt, grip)
                     # record BEFORE stepping: (obs at t, action taken) — matches training convention
-                    if OUT:
+                    if OUT or WEAVE_ON:
                         ex = adapter.extract(u.observation_manager.compute(), 0)
-                        capt[CAMS[0]].append(image_tools.resize_with_pad(ex.exterior_image_1_left, h, w))
-                        capt[CAMS[1]].append(image_tools.resize_with_pad(ex.wrist_image_left, h, w))
-                        capt[CAMS[2]].append(image_tools.resize_with_pad(ex.wrist_image_right, h, w))
-                        st = np.concatenate([larm, [_np(robot.data.joint_pos)[0][lgrip_dof]],
-                                             _np(robot.data.joint_pos)[0][rarm_dof],
-                                             [_np(robot.data.joint_pos)[0][rgrip_dof]], [0.0, 0.0]]).astype(np.float32)
-                        rec_state.append(st)
-                        rec_action.append(a16.astype(np.float32))
+                        exf = image_tools.resize_with_pad(ex.exterior_image_1_left, h, w)
+                        if WEAVE_ON:
+                            cap_ex.append(np.asarray(exf, np.uint8))
+                        if OUT:
+                            capt[CAMS[0]].append(exf)
+                            capt[CAMS[1]].append(image_tools.resize_with_pad(ex.wrist_image_left, h, w))
+                            capt[CAMS[2]].append(image_tools.resize_with_pad(ex.wrist_image_right, h, w))
+                            st = np.concatenate([larm, [_np(robot.data.joint_pos)[0][lgrip_dof]],
+                                                 _np(robot.data.joint_pos)[0][rarm_dof],
+                                                 [_np(robot.data.joint_pos)[0][rgrip_dof]], [0.0, 0.0]]).astype(np.float32)
+                            rec_state.append(st)
+                            rec_action.append(a16.astype(np.float32))
                     step_action(a16)
                     t += 1
                     held += 1
                     p, _ = ee_pose()
-                    d = float(np.linalg.norm(p - obj_xyz()))
+                    o_now = obj_xyz()
+                    d = float(np.linalg.norm(p - o_now))
                     min_dist = min(min_dist, d)
+                    max_obj_z = max(max_obj_z, float(o_now[2]))
                     reached = np.linalg.norm(p - tp) < POS_TOL
-                    if held >= hold and (reached or held >= hold + 25):
+                    if held >= hold and (reached or held >= hold + 45):
                         break
+                if ep == 0:
+                    pf, _ = ee_pose()
+                    print(f"[expert] ep0 wp={nm:9s} tgt={np.round(tp,3)} got={np.round(pf,3)} "
+                          f"err={np.linalg.norm(pf-tp):.3f}m obj={np.round(obj_xyz(),3)} "
+                          f"grip={grip:.3f} t={t}", flush=True)
             of = obj_xyz()
             lifted = float(of[2] - o0[2])
+            max_lift = float(max_obj_z - o0[2])
             to_bin = float(np.linalg.norm(of[:2] - place[:2]))
-            success = bool(lifted > 0.06 and to_bin < 0.15)
-            results.append(dict(ep=ep, lifted=lifted, to_bin=to_bin, min_dist=min_dist, success=success, steps=t))
-            print(f"[expert] ep{ep}: obj_lift={lifted:+.3f}m to_bin={to_bin:.3f}m min_ee_obj={min_dist:.3f}m "
-                  f"steps={t} SUCCESS={success}", flush=True)
+            reached = bool(min_dist < 0.05)
+            picked = bool(max_lift > 0.05)          # grasped + lifted at some point (primary milestone)
+            placed = bool(lifted > 0.02 and to_bin < 0.15)
+            success = picked
+            results.append(dict(ep=ep, lifted=lifted, max_lift=max_lift, to_bin=to_bin, min_dist=min_dist,
+                                reached=reached, picked=picked, placed=placed, steps=t))
+            print(f"[expert] ep{ep}: reach={reached}(min {min_dist:.3f}m) PICK={picked}(max_lift {max_lift:+.3f}m) "
+                  f"place={placed}(to_bin {to_bin:.3f}m, end_lift {lifted:+.3f}m) steps={t}", flush=True)
 
             if OUT and rec_state:
                 _write_episode(OUT, ep, rec_state, rec_action, capt, instruction, imageio)
 
-        ns = sum(1 for r in results if r["success"])
-        print(f"[expert] ===== DONE: {ns}/{len(results)} success; "
+            # Log this episode to Weave (leaderboard prediction + rollout video).
+            if WEAVE_ON:
+                vid = None
+                if cap_ex:
+                    os.makedirs(WV_DIR, exist_ok=True)
+                    vid = f"{WV_DIR}/{job.name}_ep{ep:03d}.mp4"
+                    try:
+                        imageio.mimsave(vid, cap_ex, fps=FPS, codec="libx264")
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[expert] weave video write failed: {e}", flush=True); vid = None
+                wlog.log_episode(
+                    inputs={"episode_idx": ep, "task": job.name, "instruction": instruction},
+                    output={"reached": reached, "picked": picked, "placed": placed,
+                            "min_ee_obj_m": round(float(min_dist), 4), "max_lift_m": round(max_lift, 4),
+                            "end_lift_m": round(lifted, 4), "to_bin_m": round(to_bin, 4), "steps": t},
+                    scores={"reach": reached, "pick": picked, "place": placed,
+                            "min_ee_obj_m": float(min_dist), "max_lift_m": float(max_lift)},
+                    video_path=vid,
+                )
+
+        nr = sum(1 for r in results if r["reached"])
+        npick = sum(1 for r in results if r["picked"])
+        npl = sum(1 for r in results if r["placed"])
+        print(f"[expert] ===== DONE: reach {nr}/{len(results)}, PICK {npick}/{len(results)}, place {npl}/{len(results)}; "
               f"mean min_ee_obj={np.mean([r['min_dist'] for r in results]):.3f}m =====", flush=True)
+        if WEAVE_ON:
+            n = max(1, len(results))
+            wlog.log_summary({"episodes": len(results), "reach_rate": nr / n, "pick_rate": npick / n,
+                              "place_rate": npl / n, "mean_min_ee_obj_m": float(np.mean([r["min_dist"] for r in results]))})
+        wlog.finish()
 
 
 def _write_episode(out, ep, states, actions, capt, instruction, imageio):

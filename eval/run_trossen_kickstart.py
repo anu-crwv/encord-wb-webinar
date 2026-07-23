@@ -89,6 +89,11 @@ def main() -> None:
         print(f"[kick] loaded ep35 seed actions {seed_traj.shape} from {SEED_ACTIONS_PATH}", flush=True)
     print(f"[kick] configs (seed,N,K): {CONFIGS}  episodes/config={N_EPISODES} max_steps={MAX_STEPS}", flush=True)
 
+    # Weave/W&B results tracing (same convention as run_trossen_eval.py): leaderboard entry under
+    # model=<checkpoint> so the closed-loop reach/post-handover/success numbers render in the workspace.
+    from isaaclab_arena_dreamzero.weave_eval import WeaveEvalLogger, _model_label
+    wlog = WeaveEvalLogger(model_label=_model_label(), task_name=job.name)
+
     with SimulationAppContext(args_cli):
         import isaaclab_arena_dreamzero.embodiments  # noqa: F401
         import isaaclab_arena_dreamzero.environments  # noqa: F401
@@ -208,6 +213,15 @@ def main() -> None:
                 print(f"[kick] {mode} N={N} K={K} ep{ep}: d0={d0:.3f}->seed {d_end_seed:.3f}"
                       f"->hold {d_end_hold:.3f}->final {d_final:.3f} min={min_dist:.3f} | seed_red={red_seed:+.3f} "
                       f"POST-HANDOVER={red_pol_total:+.3f} cos={mean_cos:+.2f} reached={reached} success={success}", flush=True)
+                wlog.log_episode(
+                    inputs={"seed": mode, "N": N, "K": K, "episode_idx": ep, "instruction": instruction},
+                    output={"d0": round(d0, 4), "d_final": round(d_final, 4), "min_dist": round(min_dist, 4),
+                            "post_handover": round(red_pol_total, 4),
+                            "cos_toward": (round(mean_cos, 3) if mean_cos == mean_cos else None),
+                            "reached": reached, "success": success},
+                    scores={"reach": reached, "success": success,
+                            "post_handover_m": float(red_pol_total), "min_dist_m": float(min_dist)},
+                )
             pol = [r["red_pol_total"] for r in rows]
             cos = [r["mean_cos"] for r in rows if r["mean_cos"] == r["mean_cos"]]
             return dict(mode=mode, N=N, K=K, n=len(rows),
@@ -239,6 +253,13 @@ def main() -> None:
         else:
             print(f"\n[kick] VERDICT: NO SUSTAINED POST-HANDOVER PROGRESS in any config — the cold-start is "
                   f"deeper than a one-time motion seed (needs persistent seed / short-context regime / retrain).", flush=True)
+
+        if summaries:
+            tot = summaries[0]["tot"] or N_EPISODES
+            wlog.log_summary({"configs": len(summaries),
+                              "best_reach": max(s["reached"] for s in summaries), "episodes_per_config": tot,
+                              "best_post_handover_m": float(best["post"]) if best else 0.0})
+        wlog.finish()
 
 
 if __name__ == "__main__":
