@@ -13,7 +13,7 @@
         "environment": "trossen_pick_and_place",
         "embodiment": "trossen_mobile_ai",
         "pick_up_object": "corn_can_hope_robolab",
-        "destination_location": "blue_sorting_bin"
+        "destination_location": "bowl_ycb_robolab"
       },
       "num_episodes": 8,
       "language_instruction": "Pick up all the yellow cylindrical objects from the table and place them into the blue tray.",
