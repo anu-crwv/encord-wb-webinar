@@ -38,14 +38,18 @@ spec:
             - {name: WAM_EXPERT_OUT, value: "__OUT__"}
             - {name: WAM_MAX_STEPS, value: "400"}
             - {name: WAM_RESET_JITTER, value: "0.04"}
-            # Scene: object at the working pick pose (0.55,0.15 on the 0.96 table -> reach 2/2 in test);
-            # ONLY the bin is moved into the left arm's workspace (stock (0.80,-0.30) was unreachable ->
-            # "place" was impossible for ANY policy, so the 0/0 place baselines were a scene artifact).
+            # Scene (viewed via rollout video): the stock blue bin is HUGE (20x25cm base x 4x2 registration
+            # x 1.3x1.1 -> ~1 m, filled the whole table so the can landed INSIDE it at ~1.08, ungraspable,
+            # and looked nothing like real data). Shrink it to a small tray + set it BESIDE a low object on
+            # the table; object rests ~0.99 within reach. Iterated with vision.
             - {name: WAM_TABLE_X, value: "0.20"}
-            - {name: WAM_CUBE_X, value: "0.55"}
-            - {name: WAM_CUBE_Y, value: "0.15"}
+            - {name: WAM_CUBE_X, value: "0.50"}
+            - {name: WAM_CUBE_Y, value: "0.16"}
             - {name: WAM_BOWL_X, value: "0.56"}
-            - {name: WAM_BOWL_Y, value: "-0.06"}
+            - {name: WAM_BOWL_Y, value: "-0.02"}
+            - {name: WAM_BIN_SX, value: "0.25"}
+            - {name: WAM_BIN_SY, value: "0.30"}
+            - {name: WAM_BIN_SZ, value: "0.4"}
             - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
             - {name: PYTHONUNBUFFERED, value: "1"}
             # Weave/W&B results tracing (leaderboard: model=scripted_ik_expert, dataset=trossen_sim_<task>)

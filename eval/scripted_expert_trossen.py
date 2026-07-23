@@ -225,13 +225,19 @@ def main() -> None:
 
         def reset_scene(ep):
             env.reset()
-            # jitter the object xy a touch so recorded demos vary (helps generalization)
-            if obj is not None and RESET_JITTER > 0:
+            # Seat the object in a low, graspable pose + jitter xy so demos vary. A standing cylinder
+            # (top ~1.14) exceeds the arm's marginal downward reach and blocks the top-down fingers;
+            # laying it on its side keeps it low (~radius height) and reliably graspable. WAM_LAY_OBJECT=0
+            # to keep the native upright pose.
+            if obj is not None:
                 rng = np.random.default_rng(4000 + ep)
                 p = _as_torch(obj.data.root_pos_w).clone()
-                p[0, 0] += float(rng.uniform(-RESET_JITTER, RESET_JITTER))
-                p[0, 1] += float(rng.uniform(-RESET_JITTER, RESET_JITTER))
+                if RESET_JITTER > 0:
+                    p[0, 0] += float(rng.uniform(-RESET_JITTER, RESET_JITTER))
+                    p[0, 1] += float(rng.uniform(-RESET_JITTER, RESET_JITTER))
                 q = _as_torch(obj.data.root_quat_w).clone()
+                if os.environ.get("WAM_LAY_OBJECT", "1") == "1":
+                    q[0] = torch.tensor([0.7071, 0.0, 0.7071, 0.0], device=q.device, dtype=q.dtype)  # 90deg about y -> on its side
                 obj.write_root_pose_to_sim(torch.cat([p, q], dim=-1))
                 obj.write_data_to_sim()
             # let the object fall + settle on the table BEFORE we read its pose for waypoints,
