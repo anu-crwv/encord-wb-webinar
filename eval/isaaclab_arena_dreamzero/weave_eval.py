@@ -119,3 +119,69 @@ def finish_eval_tracing(run) -> None:
         wandb.finish()
     except Exception as e:  # noqa: BLE001
         print(f"[weave_eval] wandb.finish error: {e}", flush=True)
+
+
+class WeaveEvalLogger:
+    """Shared results logger for the sim harnesses (scripted expert + kickstart eval).
+
+    Reuses init_eval_tracing() (W&B run + weave.init, same project) + a weave
+    EvaluationLogger leaderboard (stable dataset=trossen_sim_<task>, varying model) +
+    VideoFileClip rollout media — the SAME convention run_trossen_eval.py uses — so every
+    sim result renders side-by-side in the wam-finetune-webinar Weave workspace. Fully
+    guarded: if weave/wandb are unavailable or disabled, all calls no-op (never breaks a run).
+    """
+
+    def __init__(self, model_label: str, task_name: str):
+        self.run = init_eval_tracing()
+        self.el = None
+        self._n = 0
+        if self.run is not None:
+            try:
+                from weave import EvaluationLogger
+                self.el = EvaluationLogger(
+                    model=sanitize_label(model_label, "model"),
+                    dataset=sanitize_label(f"trossen_sim_{task_name}", "trossen_sim"),
+                    name=sanitize_label(task_name, "task"),
+                )
+                print(f"[weave_eval] EvaluationLogger model={model_label} dataset=trossen_sim_{task_name}", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"[weave_eval] EvaluationLogger init failed: {e}", flush=True)
+
+    @staticmethod
+    def _clip(path):
+        try:
+            import os
+            from moviepy.editor import VideoFileClip
+            return VideoFileClip(path, audio=False) if path and os.path.exists(path) else None
+        except Exception as e:  # noqa: BLE001
+            print(f"[weave_eval] VideoFileClip wrap failed: {e}", flush=True)
+            return None
+
+    def log_episode(self, inputs: dict, output: dict, scores: dict, video_path: str | None = None) -> None:
+        """One leaderboard prediction: inputs + output (with optional rollout video) + scores."""
+        if self.el is None:
+            return
+        try:
+            out = dict(output)
+            clip = self._clip(video_path)
+            if clip is not None:
+                out["episode_video"] = clip
+            pred = self.el.log_prediction(inputs=inputs, output=out)
+            for k, v in scores.items():
+                pred.log_score(scorer=sanitize_label(k, "score"), score=v)
+            pred.finish()
+            self._n += 1
+        except Exception as e:  # noqa: BLE001
+            print(f"[weave_eval] log_episode failed: {e}", flush=True)
+
+    def log_summary(self, d: dict) -> None:
+        if self.el is None:
+            return
+        try:
+            self.el.log_summary(d)
+        except Exception as e:  # noqa: BLE001
+            print(f"[weave_eval] log_summary failed: {e}", flush=True)
+
+    def finish(self) -> None:
+        print(f"[weave_eval] logged {self._n} episodes to Weave", flush=True)
+        finish_eval_tracing(self.run)

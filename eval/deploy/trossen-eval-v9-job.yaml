@@ -39,13 +39,19 @@ spec:
             - {name: WAM_KICK_EPISODES, value: "8"}
             - {name: WAM_EVAL_MAX_STEPS, value: "150"}
             - {name: WAM_RESET_JITTER, value: "0.05"}
+            # solvable scene (matches the scripted-expert scene): bin in the left arm's workspace
             - {name: WAM_TABLE_X, value: "0.20"}
             - {name: WAM_CUBE_X, value: "0.55"}
             - {name: WAM_CUBE_Y, value: "0.15"}
-            - {name: WAM_BOWL_X, value: "0.80"}
-            - {name: WAM_BOWL_Y, value: "-0.30"}
+            - {name: WAM_BOWL_X, value: "0.56"}
+            - {name: WAM_BOWL_Y, value: "-0.06"}
             - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
             - {name: PYTHONUNBUFFERED, value: "1"}
+            # Weave/W&B results tracing (override WEAVE_MODEL per checkpoint at launch)
+            - {name: WANDB_ENTITY,  value: "encord-wb-physical-ai"}
+            - {name: WEAVE_PROJECT, value: "wam-finetune-webinar"}
+            - {name: WEAVE_MODEL,   value: "__MODEL__"}
+          envFrom: [{secretRef: {name: wandb-api-key}}]
           resources:
             requests: {cpu: "8", memory: 64Gi, nvidia.com/gpu: "1"}
             limits:   {cpu: "32", memory: 200Gi, nvidia.com/gpu: "1"}
