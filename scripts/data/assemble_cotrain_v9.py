@@ -46,7 +46,10 @@ def _collect_sim():
         for pq in sorted(glob.glob(f"{SIM_ROOT}/{g}/shard-*/data/chunk-*/episode_*.parquet")):
             m = re.search(r"episode_(\d+)\.parquet$", pq)
             i = int(m.group(1))
-            base = pq.split("/data/")[0]
+            # split on the shard's OWN /data/ subdir (rsplit=last), not the leading /data/ of the
+            # PVC mount — otherwise base=='' and the video paths never resolve, silently dropping
+            # every sim episode and building v9 real-only.
+            base = pq.rsplit("/data/", 1)[0]
             ch = f"chunk-{i // 1000:03d}"
             vids = {k: f"{base}/videos/{ch}/observation.images.{k}/episode_{i:06d}.mp4" for k in VIDEO_KEYS}
             if all(os.path.exists(v) for v in vids.values()):
