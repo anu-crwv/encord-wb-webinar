@@ -1,0 +1,55 @@
+# Merge encord_trossen_v6 (source-data:v5 + captions:v6, 1363 eps) + encord_trossen_v4v2
+# (source-data:v4 + captions:v5, 531 eps) -> encord_trossen_v8 (~1894 eps, consistent v2 labels).
+# Concatenate (hardlink) + re-index + recompute stats (converter) + regenerate step_filter. CPU node.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wam-encord-merge-v8
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-data"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-data"}
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: nvidia.com/gpu.product, operator: DoesNotExist}
+                  - {key: kubernetes.io/arch, operator: In, values: [amd64]}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: merge
+          image: python:3.12-slim
+          command: ["/bin/bash", "-exo", "pipefail", "-c"]
+          args:
+            - |
+              export HOME=/data/.home-amd64 PIP_CACHE_DIR=/data/.home-amd64/.pip TMPDIR=/data/.home-amd64/.tmp
+              export WAM_REPO_ROOT=/data/src/dreamzero-wam
+              mkdir -p $HOME $PIP_CACHE_DIR $TMPDIR
+              python -m pip install --no-cache-dir --quiet pandas pyarrow numpy tqdm
+              cd $WAM_REPO_ROOT
+              python scripts/data/merge_trossen_datasets.py
+              V6_ROOT=/data/wam/datasets/encord_trossen_v8 python scripts/data/gen_trossen_step_filter.py
+              python - <<'PY'
+              import json
+              d=json.load(open("/data/wam/datasets/encord_trossen_v8/meta/info.json"))
+              print("=== v8:", d["total_episodes"],"eps", d["total_frames"],"frames", d["total_tasks"],"tasks", "fps",d["fps"])
+              assert d["total_episodes"]>1800 and d["fps"], d
+              PY
+              echo "=== merge+stepfilter done ==="
+          env:
+            - {name: WAM_DATA_ROOT, value: /data/wam}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+          resources:
+            requests: {cpu: "8", memory: 32Gi}
+            limits:   {cpu: "16", memory: 96Gi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: dreamzero-data}}

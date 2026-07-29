@@ -1,0 +1,60 @@
+# A/B eval of the RETRAINED (step-filtered, idle-prefix-removed) checkpoint vs baseline v6.
+# Points at the 2nd server (dreamzero-trossen-inference-rt = checkpoint-2000). Same jittered
+# resets (WAM_RESET_JITTER=0.05, seeded by episode) as the trossen-kicksweep run, so the
+# baseline-v6 arm = the sweep's scripted_toward N=0 config is directly comparable.
+# Configs: N=0 (retrained no-seed, the key test) + ep35_gt N=8 (retrained + seed).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trossen-kick-rt
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 259200
+  template:
+    metadata:
+      labels: {app: trossen-kick-rt, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
+    spec:
+      restartPolicy: Never
+      securityContext: {runAsUser: 0, runAsGroup: 0, fsGroup: 0}
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        nvidia.com/gpu.product: NVIDIA-RTX-PRO-6000-Blackwell-Server-Edition
+      tolerations:
+        - {key: is_gpu, value: "true", operator: Equal, effect: PreferNoSchedule}
+      containers:
+        - name: eval
+          image: nvcr.io/nvidia/isaac-sim:6.0.0-dev2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "/data/src/dreamzero-wam/eval/runner.sh"]
+          env:
+            - {name: ACCEPT_EULA, value: "Y"}
+            - {name: PRIVACY_CONSENT, value: "Y"}
+            - {name: OMNI_KIT_ACCEPT_EULA, value: "YES"}
+            - {name: WAM_EVAL_ENTRY, value: "run_trossen_kickstart.py"}
+            - {name: DZ_HOST, value: "dreamzero-trossen-inference-rt"}
+            - {name: DZ_PORT, value: "8001"}
+            - {name: WAM_KICK_CONFIGS, value: '[["scripted_toward",0,0],["ep35_gt",8,0]]'}
+            - {name: WAM_KICK_EPISODES, value: "8"}
+            - {name: WAM_EVAL_MAX_STEPS, value: "130"}
+            - {name: WAM_RESET_JITTER, value: "0.05"}
+            - {name: WAM_SEED_ACTIONS, value: "/data/wam/arladder/ep35_seed_actions.npy"}
+            - {name: WAM_TABLE_X, value: "0.20"}
+            - {name: WAM_CUBE_X, value: "0.55"}
+            - {name: WAM_CUBE_Y, value: "0.15"}
+            - {name: WAM_BOWL_X, value: "0.80"}
+            - {name: WAM_BOWL_Y, value: "-0.30"}
+            - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: 64Gi, nvidia.com/gpu: "1"}
+            limits:   {cpu: "32", memory: 200Gi, nvidia.com/gpu: "1"}
+          volumeMounts:
+            - {name: data,        mountPath: /data}
+            - {name: checkpoints, mountPath: /checkpoints}
+            - {name: dshm,        mountPath: /dev/shm}
+      volumes:
+        - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+        - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}
+        - {name: dshm,        emptyDir: {medium: Memory, sizeLimit: 32Gi}}

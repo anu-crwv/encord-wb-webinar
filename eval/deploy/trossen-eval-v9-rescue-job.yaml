@@ -1,0 +1,60 @@
+# v9 RESCUE probe: is there a WARM regime where the co-trained model SUSTAINS task motion, even if
+# it can't initiate from cold rest? Ladder of seed lengths N (scripted approach toward object) with
+# immediate handover (K=0), plus one hold config (N=40,K=20) to see if a static hold kills momentum.
+# Tests the kickstart verdict's suggested rescues ("persistent seed / short-context") WITHOUT retrain.
+# Server must already serve the v9 checkpoint. sed __TAG__ + __CONFIG__ at apply.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trossen-eval-v9-rescue-__TAG__
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 259200
+  template:
+    metadata:
+      labels: {app: trossen-eval-v9-rescue-__TAG__, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
+    spec:
+      restartPolicy: Never
+      securityContext: {runAsUser: 0, runAsGroup: 0, fsGroup: 0}
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        nvidia.com/gpu.product: NVIDIA-RTX-PRO-6000-Blackwell-Server-Edition
+      tolerations:
+        - {key: is_gpu, value: "true", operator: Equal, effect: PreferNoSchedule}
+      containers:
+        - name: eval
+          image: nvcr.io/nvidia/isaac-sim:6.0.0-dev2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "/data/src/dreamzero-wam/eval/runner.sh"]
+          env:
+            - {name: ACCEPT_EULA, value: "Y"}
+            - {name: PRIVACY_CONSENT, value: "Y"}
+            - {name: OMNI_KIT_ACCEPT_EULA, value: "YES"}
+            - {name: WAM_EVAL_ENTRY, value: "run_trossen_kickstart.py"}
+            - {name: EVAL_JOBS_CONFIG, value: "__CONFIG__"}
+            - {name: DZ_HOST, value: "dreamzero-trossen-inference-rt"}
+            - {name: DZ_PORT, value: "8001"}
+            - {name: WAM_KICK_CONFIGS, value: '[["scripted_toward",0,0],["scripted_toward",20,0],["scripted_toward",40,0],["scripted_toward",40,20]]'}
+            - {name: WAM_KICK_EPISODES, value: "4"}
+            - {name: WAM_EVAL_MAX_STEPS, value: "150"}
+            - {name: WAM_RESET_JITTER, value: "0.05"}
+            - {name: WAM_TABLE_X, value: "0.20"}
+            - {name: WAM_CUBE_X, value: "0.55"}
+            - {name: WAM_CUBE_Y, value: "0.15"}
+            - {name: WAM_BOWL_X, value: "0.80"}
+            - {name: WAM_BOWL_Y, value: "-0.30"}
+            - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: 64Gi, nvidia.com/gpu: "1"}
+            limits:   {cpu: "32", memory: 200Gi, nvidia.com/gpu: "1"}
+          volumeMounts:
+            - {name: data,        mountPath: /data}
+            - {name: checkpoints, mountPath: /checkpoints}
+            - {name: dshm,        mountPath: /dev/shm}
+      volumes:
+        - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+        - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}
+        - {name: dshm,        emptyDir: {medium: Memory, sizeLimit: 32Gi}}

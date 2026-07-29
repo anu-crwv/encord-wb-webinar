@@ -101,14 +101,18 @@ def build_overrides(wan_dir, umt5_dir, agibot_dir, data_dir) -> list[str]:
         f"training_args.learning_rate={LEARNING_RATE}", "training_args.warmup_ratio=0.05",
         f"output_dir={OUTPUT_DIR}",
         f"per_device_train_batch_size={PER_DEV_BS}", f"max_steps={MAX_STEPS}",
-        "weight_decay=1e-5", "save_total_limit=5",   # groot asserts >=5; checkpoints are ~39MB each w/ save_only_model
+        "weight_decay=1e-5",
+        # Keep ALL checkpoints by default (a low limit silently prunes the earliest — that's how the v13@2000
+        # peak was lost). >=5 satisfies groot's assert; LoRA checkpoints are ~208MB so retention is cheap.
+        f"save_total_limit={os.environ.get('SAVE_TOTAL_LIMIT', '50')}",
         # Save the model (LoRA adapter) only — skip the optimizer/scheduler state. For a fine-tune we
         # don't need to resume, and under ZeRO-3 the offloaded optimizer state is a ~36GB single-file
         # torch.save that fails the zip integrity check on the VAST PVC (>32GB). This was the only
         # failure of an otherwise-complete 300-step run.
         "++training_args.save_only_model=true",
         f"gradient_checkpointing={GRADIENT_CHECKPOINTING}",
-        "upload_checkpoints=false", "bf16=true", "tf32=true", "eval_bf16=true",
+        # Log EVERY checkpoint to W&B as a versioned model artifact (durable track — survives PVC pruning).
+        f"upload_checkpoints={os.environ.get('UPLOAD_CHECKPOINTS', 'true')}", "bf16=true", "tf32=true", "eval_bf16=true",
         "dataloader_pin_memory=false", "dataloader_num_workers=1",
         "image_resolution_width=320", "image_resolution_height=176",
         f"save_lora_only={'true' if ARCH == 'lora' else 'false'}",

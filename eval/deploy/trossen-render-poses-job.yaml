@@ -1,0 +1,53 @@
+# Tier-2 Phase-3 STAGE 1: render sim observations at real poses (eval/diag_render_at_poses.py).
+# Isaac Sim image; no policy server (WAM_SKIP_SERVER_PROBE=1). Consumes /data/wam/diag2x2/
+# {real_states,gt_chunks,meta} (from Step 0) and writes real_frames/sim_frames/sim_states.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trossen-render-poses
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 259200
+  template:
+    metadata:
+      labels: {app: trossen-render-poses, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
+    spec:
+      restartPolicy: Never
+      securityContext: {runAsUser: 0, runAsGroup: 0, fsGroup: 0}
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        nvidia.com/gpu.product: NVIDIA-RTX-PRO-6000-Blackwell-Server-Edition
+      tolerations:
+        - {key: is_gpu, value: "true", operator: Equal, effect: PreferNoSchedule}
+      containers:
+        - name: eval
+          image: nvcr.io/nvidia/isaac-sim:6.0.0-dev2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "/data/src/dreamzero-wam/eval/runner.sh"]
+          env:
+            - {name: ACCEPT_EULA, value: "Y"}
+            - {name: PRIVACY_CONSENT, value: "Y"}
+            - {name: OMNI_KIT_ACCEPT_EULA, value: "YES"}
+            - {name: WAM_EVAL_ENTRY, value: "diag_render_at_poses.py"}
+            - {name: WAM_SKIP_SERVER_PROBE, value: "1"}
+            - {name: WAM_2X2_DIR, value: "/data/wam/diag2x2"}
+            - {name: WAM_TABLE_X, value: "0.20"}
+            - {name: WAM_CUBE_X, value: "0.55"}
+            - {name: WAM_CUBE_Y, value: "0.15"}
+            - {name: WAM_BOWL_X, value: "0.80"}
+            - {name: WAM_BOWL_Y, value: "-0.30"}
+            - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: 64Gi, nvidia.com/gpu: "1"}
+            limits:   {cpu: "32", memory: 200Gi, nvidia.com/gpu: "1"}
+          volumeMounts:
+            - {name: data,        mountPath: /data}
+            - {name: checkpoints, mountPath: /checkpoints}
+            - {name: dshm,        mountPath: /dev/shm}
+      volumes:
+        - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+        - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}
+        - {name: dshm,        emptyDir: {medium: Memory, sizeLimit: 32Gi}}

@@ -22,6 +22,45 @@ from __future__ import annotations
 import os
 import re
 
+def _video_media(path):
+    """Wrap an mp4 PATH as a weave.Content(mimetype='video/mp4') — weave's native, documented
+    renderable-file type, which shows a video PLAYER on the trace. We deliberately do NOT use a
+    moviepy VideoFileClip: weave's auto moviepy handler is broken in the installed 0.53.x (its
+    custom-type serializer op fails to load — "Op loading exception ... name 'true' is not defined"),
+    so clips fell back to the "<VideoFileClip object at 0x..>" repr instead of a video. The Content
+    API sidesteps that handler entirely and is what the weave docs recommend for video."""
+    try:
+        import os as _os
+        if not (path and _os.path.exists(path)):
+            return None
+        import weave as _w
+        try:
+            return _w.Content.from_path(path, mimetype="video/mp4")
+        except TypeError:  # older/newer from_path signature
+            return _w.Content.from_path(path)
+    except Exception as e:  # noqa: BLE001
+        print(f"[weave_eval] Content.from_path failed for {path}: {e}", flush=True)
+        return None
+
+
+# A @weave.op that builds weave.Content video objects from mp4 PATHS and RETURNS them as top-level
+# output keys, so episode_video / dream_video / side_by_side render as players on the run_episode
+# trace. Defined at import (guarded); traces once weave.init() has run.
+try:
+    import weave as _weave
+
+    @_weave.op(name="run_episode")
+    def _rollout_trace(inputs: dict, metrics: dict, video_paths: dict) -> dict:
+        vp = video_paths or {}
+        return {
+            **(metrics or {}),
+            "episode_video": _video_media(vp.get("episode_video_path")),
+            "dream_video": _video_media(vp.get("dream_video_path")),
+            "side_by_side": _video_media(vp.get("side_by_side_path")),
+        }
+except Exception:  # weave not importable in this context -> no tracing (guarded everywhere)
+    _rollout_trace = None
+
 
 def sanitize_label(s: str, fallback: str = "model") -> str:
     """Weave's EvaluationLogger (>=0.51) validates model/dataset/scorer names as identifiers:
@@ -119,3 +158,93 @@ def finish_eval_tracing(run) -> None:
         wandb.finish()
     except Exception as e:  # noqa: BLE001
         print(f"[weave_eval] wandb.finish error: {e}", flush=True)
+
+
+class WeaveEvalLogger:
+    """Shared results logger for the sim harnesses (scripted expert + kickstart eval).
+
+    Reuses init_eval_tracing() (W&B run + weave.init, same project) + a weave
+    EvaluationLogger leaderboard (stable dataset=trossen_sim_<task>, varying model) +
+    VideoFileClip rollout media — the SAME convention run_trossen_eval.py uses — so every
+    sim result renders side-by-side in the wam-finetune-webinar Weave workspace. Fully
+    guarded: if weave/wandb are unavailable or disabled, all calls no-op (never breaks a run).
+    """
+
+    def __init__(self, model_label: str, task_name: str):
+        self.run = init_eval_tracing()
+        self.el = None
+        self._n = 0
+        if self.run is not None:
+            try:
+                from weave import EvaluationLogger
+                self.el = EvaluationLogger(
+                    model=sanitize_label(model_label, "model"),
+                    dataset=sanitize_label(f"trossen_sim_{task_name}", "trossen_sim"),
+                    name=sanitize_label(task_name, "task"),
+                )
+                print(f"[weave_eval] EvaluationLogger model={model_label} dataset=trossen_sim_{task_name}", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"[weave_eval] EvaluationLogger init failed: {e}", flush=True)
+
+    @staticmethod
+    def _clip(path):
+        try:
+            import os
+            from moviepy.editor import VideoFileClip
+            return VideoFileClip(path, audio=False) if path and os.path.exists(path) else None
+        except Exception as e:  # noqa: BLE001
+            print(f"[weave_eval] VideoFileClip wrap failed: {e}", flush=True)
+            return None
+
+    def log_episode(self, inputs: dict, output: dict, scores: dict,
+                    video_paths: dict | None = None, video_path: str | None = None) -> None:
+        """One leaderboard prediction via the PROVEN run_episode pattern: a @weave.op builds the
+        clips from mp4 PATHS and RETURNS them, so episode_video / dream_video / side_by_side render
+        inline on the run_episode call (fixes the repr-only bug). ``video_paths`` is the dict from
+        TrossenVideoLogger.build_episode_videos(); ``video_path`` is a single-mp4 shorthand. A
+        wandb.Video of the sim mp4 is also logged to the run media panel as a belt-and-braces render."""
+        if self.el is None:
+            return
+        try:
+            vp = dict(video_paths or {})
+            if video_path and "episode_video_path" not in vp:
+                vp["episode_video_path"] = video_path
+            # Build clips INSIDE the op (from paths) + return them -> weave renders as inline video.
+            if _rollout_trace is not None:
+                out = _rollout_trace(inputs=inputs, metrics=output, video_paths=vp)
+            else:
+                out = dict(output)
+            pred = self.el.log_prediction(inputs=inputs, output=out)
+            for k, v in scores.items():
+                try:
+                    sv = float(v)  # bool/int -> float so Weave AGGREGATES (success_rate etc.); raw bools render empty
+                except (TypeError, ValueError):
+                    sv = v
+                pred.log_score(scorer=sanitize_label(k, "score"), score=sv)
+            pred.finish()
+            # belt-and-braces: sim mp4 to the W&B run media panel too
+            sim_mp4 = vp.get("episode_video_path")
+            if sim_mp4 and self.run is not None:
+                try:
+                    import os as _os
+                    import wandb
+                    if _os.path.exists(sim_mp4):
+                        self.run.log({f"rollout/{sanitize_label(str(inputs.get('task', 'ep')))}":
+                                      wandb.Video(sim_mp4, fps=15, format="mp4")})
+                except Exception as e:  # noqa: BLE001
+                    print(f"[weave_eval] wandb.Video log failed: {e}", flush=True)
+            self._n += 1
+        except Exception as e:  # noqa: BLE001
+            print(f"[weave_eval] log_episode failed: {e}", flush=True)
+
+    def log_summary(self, d: dict) -> None:
+        if self.el is None:
+            return
+        try:
+            self.el.log_summary(d)
+        except Exception as e:  # noqa: BLE001
+            print(f"[weave_eval] log_summary failed: {e}", flush=True)
+
+    def finish(self) -> None:
+        print(f"[weave_eval] logged {self._n} episodes to Weave", flush=True)
+        finish_eval_tracing(self.run)

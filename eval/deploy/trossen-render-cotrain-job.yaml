@@ -1,0 +1,62 @@
+# Render sim co-training data (eval/render_sim_cotraining.py): replay real v8 trajectories in
+# the Trossen sim, render 3 cams, emit LeRobot episodes (sim videos + real labels). Isaac image,
+# no policy server. Sharded + task-scoped so we fan out across RTX GPUs and match object to task.
+# sed __TAG__ / __TASK__ / __CONFIG__ / __SHARD__ / __NSHARD__ at apply.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trossen-render-cotrain-__TAG__
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-cotrain"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 259200
+  template:
+    metadata:
+      labels: {app: trossen-render-cotrain, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-cotrain"}
+    spec:
+      restartPolicy: Never
+      securityContext: {runAsUser: 0, runAsGroup: 0, fsGroup: 0}
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        nvidia.com/gpu.product: NVIDIA-RTX-PRO-6000-Blackwell-Server-Edition
+      tolerations:
+        - {key: is_gpu, value: "true", operator: Equal, effect: PreferNoSchedule}
+      containers:
+        - name: render
+          image: nvcr.io/nvidia/isaac-sim:6.0.0-dev2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "/data/src/dreamzero-wam/eval/runner.sh"]
+          env:
+            - {name: ACCEPT_EULA, value: "Y"}
+            - {name: PRIVACY_CONSENT, value: "Y"}
+            - {name: OMNI_KIT_ACCEPT_EULA, value: "YES"}
+            - {name: WAM_EVAL_ENTRY, value: "render_sim_cotraining.py"}
+            - {name: WAM_SKIP_SERVER_PROBE, value: "1"}
+            - {name: EVAL_JOBS_CONFIG, value: "__CONFIG__"}
+            - {name: WAM_RENDER_TASK, value: "__TASK__"}
+            - {name: SHARD_INDEX, value: "__SHARD__"}
+            - {name: NUM_SHARDS, value: "__NSHARD__"}
+            - {name: WAM_RENDER_MAX_EPS, value: "__MAXEPS__"}
+            - {name: WAM_COTRAIN_SRC, value: "/data/wam/datasets/encord_trossen_v8"}
+            - {name: WAM_COTRAIN_OUT, value: "/data/wam/datasets/sim_cotrain"}
+            - {name: WAM_RENDER_STRIDE, value: "1"}
+            - {name: WAM_RENDER_MAX_FRAMES, value: "1000"}
+            - {name: WAM_TABLE_X, value: "0.20"}
+            - {name: WAM_CUBE_X, value: "0.55"}
+            - {name: WAM_CUBE_Y, value: "0.15"}
+            - {name: WAM_BOWL_X, value: "0.80"}
+            - {name: WAM_BOWL_Y, value: "-0.30"}
+            - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: 48Gi, nvidia.com/gpu: "1"}
+            limits:   {cpu: "24", memory: 128Gi, nvidia.com/gpu: "1"}
+          volumeMounts:
+            - {name: data,        mountPath: /data}
+            - {name: checkpoints, mountPath: /checkpoints}
+            - {name: dshm,        mountPath: /dev/shm}
+      volumes:
+        - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+        - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}
+        - {name: dshm,        emptyDir: {medium: Memory, sizeLimit: 32Gi}}

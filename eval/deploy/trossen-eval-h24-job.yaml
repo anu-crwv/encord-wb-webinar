@@ -1,0 +1,67 @@
+# Tier-0.1b: closed-loop chunk-scheduling sweep. Identical to trossen-eval-job.yaml
+# EXCEPT it executes the FULL 24-step predicted chunk before re-planning
+# (WAM_OPEN_LOOP_HORIZON=24) instead of the deployed 5, and turns on full per-step
+# action logging (WAM_DEBUG_ACTIONS=1: ACTDBG target/delta/state + ROWAUDIT full chunk).
+# If the arm now reaches (vs hovering at horizon=5), the reach was in the discarded
+# steps 6..23 and the fix is purely this client-side knob.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trossen-eval-h24
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 259200
+  template:
+    metadata:
+      labels: {app: trossen-eval-h24, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
+    spec:
+      restartPolicy: Never
+      securityContext: {runAsUser: 0, runAsGroup: 0, fsGroup: 0}
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        nvidia.com/gpu.product: NVIDIA-RTX-PRO-6000-Blackwell-Server-Edition
+      tolerations:
+        - {key: is_gpu, value: "true", operator: Equal, effect: PreferNoSchedule}
+      containers:
+        - name: eval
+          image: nvcr.io/nvidia/isaac-sim:6.0.0-dev2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "/data/src/dreamzero-wam/eval/runner.sh"]
+          envFrom: [{secretRef: {name: wandb-api-key}}]
+          env:
+            - {name: ACCEPT_EULA, value: "Y"}
+            - {name: PRIVACY_CONSENT, value: "Y"}
+            - {name: OMNI_KIT_ACCEPT_EULA, value: "YES"}
+            - {name: DZ_HOST, value: "dreamzero-trossen-inference"}
+            - {name: DZ_PORT, value: "8001"}
+            - {name: WANDB_ENTITY, value: encord-wb-physical-ai}
+            - {name: WANDB_PROJECT, value: wam-finetune-webinar}
+            - {name: WEAVE_PROJECT, value: "wam-finetune-webinar"}
+            - {name: LORA_ARTIFACT, value: "encord-wb-physical-ai/wam-finetune-webinar/dreamzero-trossen-lora:v6"}
+            - {name: WAM_EVAL_TAGS, value: "horizon-sweep,h24,full-chunk,v6,1363ep,cfg5"}
+            - {name: WAM_EVAL_VIDEO_DIR, value: "/data/wam/eval_videos/h24"}
+            # THE sweep knob: execute the full 24-step chunk before re-planning.
+            - {name: WAM_OPEN_LOOP_HORIZON, value: "24"}
+            # Full per-step action instrumentation (ACTDBG + ROWAUDIT).
+            - {name: WAM_DEBUG_ACTIONS, value: "1"}
+            - {name: WAM_DOMAIN_RAND, value: "0"}
+            - {name: WAM_TABLE_X, value: "0.20"}
+            - {name: WAM_CUBE_X, value: "0.55"}
+            - {name: WAM_CUBE_Y, value: "0.15"}
+            - {name: WAM_BOWL_X, value: "0.80"}
+            - {name: WAM_BOWL_Y, value: "-0.30"}
+            - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
+            - {name: PYTHONUNBUFFERED, value: "1"}
+          resources:
+            requests: {cpu: "8", memory: 64Gi, nvidia.com/gpu: "1"}
+            limits:   {cpu: "32", memory: 200Gi, nvidia.com/gpu: "1"}
+          volumeMounts:
+            - {name: data,        mountPath: /data}
+            - {name: checkpoints, mountPath: /checkpoints}
+            - {name: dshm,        mountPath: /dev/shm}
+      volumes:
+        - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+        - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}
+        - {name: dshm,        emptyDir: {medium: Memory, sizeLimit: 32Gi}}
