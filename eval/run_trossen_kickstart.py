@@ -154,7 +154,7 @@ def main() -> None:
             fresh = u.observation_manager.compute()
             return fresh if isinstance(fresh, dict) and fresh else obs
 
-        def run_config(mode: str, N: int, K: int):
+        def run_config(mode: str, N: int, K: int, cfg_idx: int = 0):
             rows = []
             for ep in range(N_EPISODES):
                 policy.reset()
@@ -213,14 +213,27 @@ def main() -> None:
                 print(f"[kick] {mode} N={N} K={K} ep{ep}: d0={d0:.3f}->seed {d_end_seed:.3f}"
                       f"->hold {d_end_hold:.3f}->final {d_final:.3f} min={min_dist:.3f} | seed_red={red_seed:+.3f} "
                       f"POST-HANDOVER={red_pol_total:+.3f} cos={mean_cos:+.2f} reached={reached} success={success}", flush=True)
+                # The policy's TrossenVideoLogger recorded a frame every get_action() call (env 0).
+                # Flush it to a per-episode mp4 and hand the path to the Weave logger so the rollout
+                # renders as inline video on the trace (was previously never built in this harness).
+                gep = cfg_idx * N_EPISODES + ep
+                video_paths = {}
+                try:
+                    vid = getattr(policy, "_video", None)
+                    if vid is not None:
+                        video_paths = vid.build_episode_videos(gep)  # {episode_video_path, dream_video_path, side_by_side_path}
+                except Exception as e:  # noqa: BLE001
+                    print(f"[kick] video build failed: {e}", flush=True)
                 wlog.log_episode(
-                    inputs={"seed": mode, "N": N, "K": K, "episode_idx": ep, "instruction": instruction},
+                    inputs={"seed": mode, "N": N, "K": K, "episode_idx": ep,
+                            "task": f"{job.name}_{mode}_N{N}_K{K}_ep{ep}", "instruction": instruction},
                     output={"d0": round(d0, 4), "d_final": round(d_final, 4), "min_dist": round(min_dist, 4),
                             "post_handover": round(red_pol_total, 4),
                             "cos_toward": (round(mean_cos, 3) if mean_cos == mean_cos else None),
                             "reached": reached, "success": success},
                     scores={"reach": reached, "success": success,
                             "post_handover_m": float(red_pol_total), "min_dist_m": float(min_dist)},
+                    video_paths=video_paths,
                 )
             pol = [r["red_pol_total"] for r in rows]
             cos = [r["mean_cos"] for r in rows if r["mean_cos"] == r["mean_cos"]]
@@ -234,9 +247,9 @@ def main() -> None:
                         success=sum(1 for r in rows if r["success"]))
 
         summaries = []
-        for mode, N, K in CONFIGS:
+        for cfg_idx, (mode, N, K) in enumerate(CONFIGS):
             print(f"\n[kick] ===== running config seed={mode} N={N} K={K} =====", flush=True)
-            summaries.append(run_config(mode, int(N), int(K)))
+            summaries.append(run_config(mode, int(N), int(K), cfg_idx))
 
         print("\n[kick] ================= KICKSTART SUMMARY =================", flush=True)
         print(f"  {'seed':16s} {'N':>3s} {'K':>3s} {'seed_red':>9s} {'POST_HANDOVER':>14s} {'pos':>6s} "

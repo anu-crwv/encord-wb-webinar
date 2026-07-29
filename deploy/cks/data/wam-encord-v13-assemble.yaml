@@ -1,0 +1,70 @@
+# Assemble v13 = v12 (v8 + community) + encord-source-data:v7 (668 real captioned eps, 7 new real tasks).
+# Clone of the v12 assemble job; adds a /checkpoints mount (v7 raw staged there by wam-v7-download) and
+# WAM_V7RAW. Runs on an amd64 CPU node as uid 1000; v7 videos are cross-pvc so the assembler SYMLINKS them
+# (the training pod also mounts /checkpoints, so the symlinks resolve there too).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wam-encord-v13-assemble
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-data"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: dreamzero}
+    spec:
+      restartPolicy: Never
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - {key: nvidia.com/gpu.product, operator: DoesNotExist}
+              - {key: kubernetes.io/arch, operator: In, values: ["amd64"]}
+      containers:
+      - name: assemble
+        image: python:3.12-slim
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "-exo", "pipefail", "-c"]
+        args:
+          - |
+            export HOME=/data/.home-amd64 PIP_CACHE_DIR=/data/.home-amd64/.pip TMPDIR=/data/.home-amd64/.tmp
+            export WANDB_DIR=/data/.home-amd64/.wandb WAM_REPO_ROOT=/data/src/dreamzero-wam
+            export WAM_V7RAW=/checkpoints/wam/v7raw
+            mkdir -p $HOME $PIP_CACHE_DIR $TMPDIR $WANDB_DIR
+            python -m pip install --no-cache-dir --quiet "wandb>=0.18.0" pandas pyarrow numpy tqdm
+            cd $WAM_REPO_ROOT
+            python scripts/data/assemble_v13.py
+            python - <<'PY'
+            import json
+            v12=json.load(open("/data/wam/datasets/encord_trossen_v12/meta/info.json"))
+            v13=json.load(open("/data/wam/datasets/encord_trossen_v13/meta/info.json"))
+            print("=== v12:", v12["total_episodes"],"eps", v12["total_frames"],"frames")
+            print("=== v13:", v13["total_episodes"],"eps", v13["total_frames"],"frames","tasks",v13["total_tasks"])
+            print("=== v7 added:", v13["total_episodes"]-v12["total_episodes"],"eps", v13["total_frames"]-v12["total_frames"],"frames")
+            assert v13["total_episodes"]-v12["total_episodes"]>=600 and v13["fps"], (v12,v13)
+            import pandas as pd, numpy as np, glob
+            for ep in [1894, 2244, v13["total_episodes"]-1]:   # community + first/last v7 (loader asserts per-traj contiguity)
+                pqs=glob.glob(f"/data/wam/datasets/encord_trossen_v13/data/chunk-*/episode_{ep:06d}.parquet")
+                idx=pd.read_parquet(pqs[0])["index"].to_numpy()
+                assert np.array_equal(idx, np.arange(idx[0], idx[0]+len(idx))), f"ep {ep} index NOT contiguous"
+            print("=== index contiguity OK (community 1894 + v7)")
+            PY
+            echo "=== v13 assemble done ==="
+        env:
+        - {name: WANDB_ENTITY,  value: encord-wb-physical-ai}
+        - {name: WANDB_PROJECT, value: wam-finetune-webinar}
+        envFrom: [{secretRef: {name: wandb-api-key}}]
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+        resources:
+          requests: {cpu: "8", memory: 32Gi}
+          limits:   {cpu: "16", memory: 96Gi}
+        volumeMounts:
+        - {name: data,        mountPath: /data}
+        - {name: checkpoints, mountPath: /checkpoints}
+      volumes:
+      - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+      - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}

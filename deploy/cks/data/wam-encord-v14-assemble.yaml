@@ -1,0 +1,71 @@
+# Assemble v14 = v13 (all real Encord + community) + DAgger round-1 corrective demos (rolled out from
+# v13@2000, expert-relabelled). Mounts /checkpoints because v14 re-symlinks v13's v7 videos (which live
+# there) and convert/stats must resolve those symlinks. amd64 CPU node, uid 1000.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wam-encord-v14-assemble
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-data"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: dreamzero}
+    spec:
+      restartPolicy: Never
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - {key: nvidia.com/gpu.product, operator: DoesNotExist}
+              - {key: kubernetes.io/arch, operator: In, values: ["amd64"]}
+      containers:
+      - name: assemble
+        image: python:3.12-slim
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/bash", "-exo", "pipefail", "-c"]
+        args:
+          - |
+            export HOME=/data/.home-amd64 PIP_CACHE_DIR=/data/.home-amd64/.pip TMPDIR=/data/.home-amd64/.tmp
+            export WANDB_DIR=/data/.home-amd64/.wandb WAM_REPO_ROOT=/data/src/dreamzero-wam
+            export WAM_V13_BASE=/data/wam/datasets/encord_trossen_v13
+            export WAM_R1_ROOT=/data/wam/datasets/dagger_r1 WAM_R1_GROUPS=v13cyl,v13batt
+            export WAM_V14=/data/wam/datasets/encord_trossen_v14 WAM_R1_DUP=30
+            mkdir -p $HOME $PIP_CACHE_DIR $TMPDIR $WANDB_DIR
+            python -m pip install --no-cache-dir --quiet "wandb>=0.18.0" pandas pyarrow numpy tqdm
+            cd $WAM_REPO_ROOT
+            python scripts/data/assemble_dagger_v14.py
+            python - <<'PY'
+            import json, glob
+            import pandas as pd, numpy as np
+            v13=json.load(open("/data/wam/datasets/encord_trossen_v13/meta/info.json"))
+            v14=json.load(open("/data/wam/datasets/encord_trossen_v14/meta/info.json"))
+            print("=== v13:", v13["total_episodes"],"eps", v13["total_frames"],"frames")
+            print("=== v14:", v14["total_episodes"],"eps", v14["total_frames"],"frames","tasks",v14["total_tasks"])
+            print("=== round-1 added:", v14["total_episodes"]-v13["total_episodes"],"eps", v14["total_frames"]-v13["total_frames"],"frames")
+            assert v14["total_episodes"]-v13["total_episodes"]>=100 and v14["fps"], (v13,v14)
+            nb=v13["total_episodes"]
+            pqs=glob.glob(f"/data/wam/datasets/encord_trossen_v14/data/chunk-*/episode_{nb:06d}.parquet")
+            idx=pd.read_parquet(pqs[0])["index"].to_numpy()
+            assert np.array_equal(idx, np.arange(idx[0], idx[0]+len(idx))), "round-1 index NOT contiguous"
+            print("=== round-1 index contiguity OK")
+            PY
+            echo "=== v14 assemble done ==="
+        env:
+        - {name: WANDB_ENTITY,  value: encord-wb-physical-ai}
+        - {name: WANDB_PROJECT, value: wam-finetune-webinar}
+        envFrom: [{secretRef: {name: wandb-api-key}}]
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+        resources:
+          requests: {cpu: "8", memory: 32Gi}
+          limits:   {cpu: "16", memory: 96Gi}
+        volumeMounts:
+        - {name: data,        mountPath: /data}
+        - {name: checkpoints, mountPath: /checkpoints}
+      volumes:
+      - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+      - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}

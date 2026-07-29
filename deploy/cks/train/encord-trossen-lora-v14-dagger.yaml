@@ -1,0 +1,85 @@
+# v14 = DAgger round-1 on the v13 all-data base. Training data = v13 (all real Encord v4/v5/v7 + community)
+# + on-policy corrective demos rolled out from v13@2000 (the offline lone-peak) and expert-relabelled. This
+# targets the ACTUAL blocker (closed-loop covariate shift / lone-peak fragility) that more offline data alone
+# did not fix. IDENTICAL proven recipe to v13; only dataset dir, run id, HOME, lineage change. Single GH200,
+# zero3_offload. MAX_STEPS=6000 (the reaching behaviour peaks mid-run; no need for 8000). Fresh HOME so the
+# -gh200-1 package snapshot copies clean (never reuse the poisoned -gh200-2). /checkpoints stays mounted
+# because v14 inherits v13's v7 video symlinks.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wam-encord-trossen-lora-v14
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-train"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 259200
+  template:
+    metadata:
+      labels: {app: wam-train, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-train"}
+    spec:
+      restartPolicy: Never
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      nodeSelector:
+        kubernetes.io/arch: arm64
+        nvidia.com/gpu.product: NVIDIA-GH200-480GB
+      tolerations:
+        - {key: is_gpu, value: "true", operator: Equal, effect: PreferNoSchedule}
+      containers:
+        - name: train
+          image: nvcr.io/nvidia/pytorch:25.04-py3
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-exo", "pipefail", "-c"]
+          args:
+            - |
+              export HOME=/data/.home-gh200-v14dagger PIP_CACHE_DIR=/data/.home-gh200-v14dagger/.pip
+              export TMPDIR=/data/.home-gh200-v14dagger/.tmp HF_HOME=/data/.hf
+              mkdir -p $HOME $PIP_CACHE_DIR $TMPDIR $HF_HOME
+              export WAM_REPO_ROOT=/data/src/dreamzero-wam
+              export PYTHONPATH=$WAM_REPO_ROOT:${PYTHONPATH:-}
+              export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+              export NNODES=1 NUM_GPUS=1
+              export TRITON_CACHE_DIR=$TMPDIR/triton; mkdir -p $TRITON_CACHE_DIR
+              cd $WAM_REPO_ROOT
+              if [ ! -f $HOME/.local/lib/python3.12/site-packages/deepspeed/__init__.py ]; then
+                echo "[v14] snapshotting proven -gh200-1 .local -> $HOME/.local"; cp -a /data/.home-gh200-1/.local $HOME/.local
+              fi
+              python -c "import deepspeed, accelerate, transformers; print('[v14] env: deepspeed',deepspeed.__version__,'accelerate',accelerate.__version__)"
+              DS_NVTX=$(find $HOME/.local/lib -path '*/deepspeed/utils/nvtx.py' 2>/dev/null | head -1)
+              if [ -n "$DS_NVTX" ]; then sed -i 's/^enable_nvtx = True/enable_nvtx = False/' "$DS_NVTX"; echo "patched $DS_NVTX"; fi
+              echo "trossen v14 DAgger-R1-on-v13 run_id=$WANDB_RUN_ID data=$DATA_CONFIG local=$WAM_DATASET_LOCAL_DIR out=$OUTPUT_DIR steps=$MAX_STEPS"
+              test -f "$WAM_DATASET_LOCAL_DIR/meta/info.json" || { echo "FATAL: v14 dataset not assembled at $WAM_DATASET_LOCAL_DIR"; exit 1; }
+              bash scripts/train/encord_trossen.sh
+          env:
+            - {name: WANDB_ENTITY,  value: encord-wb-physical-ai}
+            - {name: WANDB_PROJECT, value: wam-finetune-webinar}
+            - {name: WAM_REGISTRY_ORG, value: encord-wb-webinar}
+            - {name: WANDB_RUN_ID,  value: v14daggerr10728}
+            - {name: OUTPUT_DIR,    value: /checkpoints/wam/runs/encord_trossen_lora_v14daggerr10728}
+            - {name: MAX_STEPS,     value: "6000"}
+            - {name: SAVE_STEPS,    value: "1000"}
+            - {name: TRAIN_ARCHITECTURE, value: lora}
+            - {name: LEARNING_RATE, value: "1e-4"}
+            - {name: PER_DEVICE_BATCH_SIZE, value: "1"}
+            - {name: DEEPSPEED,     value: configs/deepspeed/zero3_offload.json}
+            - {name: USE_AGIBOT_INIT, value: "0"}
+            - {name: WAM_TRAIN_TAGS, value: "encord,trossen,lora,v14-dagger,real+v7+community+dagger-r1,on-policy-correction,step-filter,full-scale"}
+            - {name: DATA_CONFIG,   value: dreamzero/trossen_relative}
+            - {name: DATA_ROOT_KEY, value: trossen_data_root}
+            - {name: WAM_DATASET_LOCAL_DIR, value: /data/wam/datasets/encord_trossen_v14}
+            - {name: WAM_DATASET_SOURCE_ARTIFACTS, value: "encord-wb-physical-ai/wam-finetune-webinar/encord-source-data:v7,encord-wb-physical-ai/wam-finetune-webinar/trossen-v13-alldata:latest,encord-wb-physical-ai/wam-finetune-webinar/trossen-dagger-r1-v13-demos:latest"}
+            - {name: WAM_CKPT_ARTIFACT_NAME, value: dreamzero-trossen-lora}
+            - {name: VIDEO_BACKEND, value: ""}
+          envFrom: [{secretRef: {name: wandb-api-key}}]
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+          resources:
+            requests: {cpu: "16", memory: 200Gi, nvidia.com/gpu: "1"}
+            limits:   {cpu: "64", memory: 460Gi, nvidia.com/gpu: "1"}
+          volumeMounts:
+            - {name: data,        mountPath: /data}
+            - {name: checkpoints, mountPath: /checkpoints}
+            - {name: dshm,        mountPath: /dev/shm}
+      volumes:
+        - {name: data,        persistentVolumeClaim: {claimName: dreamzero-data}}
+        - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}
+        - {name: dshm,        emptyDir: {medium: Memory, sizeLimit: 64Gi}}

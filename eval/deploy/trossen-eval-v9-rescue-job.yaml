@@ -1,11 +1,12 @@
-# v9 CO-TRAIN closed-loop eval — identical protocol to the v8 eval (scripted_toward N=0 K=0, 8 eps,
-# 150 steps, task-matched scene) so the result is apples-to-apples with the v8 baseline (cyl+batt 0/0).
-# The job hits the -rt server by hostname; the DECIDING difference is that the server's MODEL_DIR has
-# been repointed to the v9 co-train checkpoint before this runs. sed __TAG__ + __CONFIG__ at apply.
+# v9 RESCUE probe: is there a WARM regime where the co-trained model SUSTAINS task motion, even if
+# it can't initiate from cold rest? Ladder of seed lengths N (scripted approach toward object) with
+# immediate handover (K=0), plus one hold config (N=40,K=20) to see if a static hold kills momentum.
+# Tests the kickstart verdict's suggested rescues ("persistent seed / short-context") WITHOUT retrain.
+# Server must already serve the v9 checkpoint. sed __TAG__ + __CONFIG__ at apply.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: trossen-eval-v9-__TAG__
+  name: trossen-eval-v9-rescue-__TAG__
   namespace: dreamzero
   labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
 spec:
@@ -13,7 +14,7 @@ spec:
   ttlSecondsAfterFinished: 259200
   template:
     metadata:
-      labels: {app: trossen-eval-v9-__TAG__, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
+      labels: {app: trossen-eval-v9-rescue-__TAG__, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
     spec:
       restartPolicy: Never
       securityContext: {runAsUser: 0, runAsGroup: 0, fsGroup: 0}
@@ -35,27 +36,17 @@ spec:
             - {name: EVAL_JOBS_CONFIG, value: "__CONFIG__"}
             - {name: DZ_HOST, value: "dreamzero-trossen-inference-rt"}
             - {name: DZ_PORT, value: "8001"}
-            - {name: WAM_KICK_CONFIGS, value: '[["scripted_toward",0,0]]'}
-            - {name: WAM_KICK_EPISODES, value: "8"}
+            - {name: WAM_KICK_CONFIGS, value: '[["scripted_toward",0,0],["scripted_toward",20,0],["scripted_toward",40,0],["scripted_toward",40,20]]'}
+            - {name: WAM_KICK_EPISODES, value: "4"}
             - {name: WAM_EVAL_MAX_STEPS, value: "150"}
             - {name: WAM_RESET_JITTER, value: "0.05"}
-            # solvable scene (matches the scripted-expert scene): bin in the left arm's workspace
             - {name: WAM_TABLE_X, value: "0.20"}
             - {name: WAM_CUBE_X, value: "0.55"}
             - {name: WAM_CUBE_Y, value: "0.15"}
-            - {name: WAM_BOWL_X, value: "0.56"}
-            - {name: WAM_BOWL_Y, value: "-0.06"}
+            - {name: WAM_BOWL_X, value: "0.80"}
+            - {name: WAM_BOWL_Y, value: "-0.30"}
             - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
-            # Per-episode rollout video -> Weave trace (unique dir per job so concurrent cyl/batt
-            # jobs never clobber each other's episode_N.mp4; PVC-backed so it survives the pod).
-            - {name: WAM_EVAL_VIDEO, value: "1"}
-            - {name: WAM_EVAL_VIDEO_DIR, value: "/data/wam/eval_videos/__TAG__"}
             - {name: PYTHONUNBUFFERED, value: "1"}
-            # Weave/W&B results tracing (override WEAVE_MODEL per checkpoint at launch)
-            - {name: WANDB_ENTITY,  value: "encord-wb-physical-ai"}
-            - {name: WEAVE_PROJECT, value: "wam-finetune-webinar"}
-            - {name: WEAVE_MODEL,   value: "__MODEL__"}
-          envFrom: [{secretRef: {name: wandb-api-key}}]
           resources:
             requests: {cpu: "8", memory: 64Gi, nvidia.com/gpu: "1"}
             limits:   {cpu: "32", memory: 200Gi, nvidia.com/gpu: "1"}
