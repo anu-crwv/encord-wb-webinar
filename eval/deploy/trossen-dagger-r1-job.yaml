@@ -1,19 +1,20 @@
-# v9 CO-TRAIN closed-loop eval — identical protocol to the v8 eval (scripted_toward N=0 K=0, 8 eps,
-# 150 steps, task-matched scene) so the result is apples-to-apples with the v8 baseline (cyl+batt 0/0).
-# The job hits the -rt server by hostname; the DECIDING difference is that the server's MODEL_DIR has
-# been repointed to the v9 co-train checkpoint before this runs. sed __TAG__ + __CONFIG__ at apply.
+# DAgger round-1 on-policy relabel data-gen. Rolls out the CURRENT policy (served by the -rt
+# deployment; repoint its MODEL_DIR to the policy you want to correct BEFORE running) with the
+# expert in the loop (WAM_DAGGER_BETA), recording (policy-context obs -> expert corrective action)
+# LeRobot episodes to WAM_EXPERT_OUT. Needs the server (unlike the pure scripted expert).
+# sed __TAG__ / __CONFIG__ / __SEEDBASE__ / __EPISODES__ at apply.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: trossen-eval-v9-__TAG__
+  name: trossen-dagger-r1-__TAG__
   namespace: dreamzero
-  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-dagger"}
 spec:
   backoffLimit: 0
   ttlSecondsAfterFinished: 259200
   template:
     metadata:
-      labels: {app: trossen-eval-v9-__TAG__, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-eval"}
+      labels: {app: trossen-dagger-r1-__TAG__, app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "trossen-dagger"}
     spec:
       restartPolicy: Never
       securityContext: {runAsUser: 0, runAsGroup: 0, fsGroup: 0}
@@ -23,7 +24,7 @@ spec:
       tolerations:
         - {key: is_gpu, value: "true", operator: Equal, effect: PreferNoSchedule}
       containers:
-        - name: eval
+        - name: dagger
           image: nvcr.io/nvidia/isaac-sim:6.0.0-dev2
           imagePullPolicy: IfNotPresent
           command: ["/bin/bash", "/data/src/dreamzero-wam/eval/runner.sh"]
@@ -31,30 +32,26 @@ spec:
             - {name: ACCEPT_EULA, value: "Y"}
             - {name: PRIVACY_CONSENT, value: "Y"}
             - {name: OMNI_KIT_ACCEPT_EULA, value: "YES"}
-            - {name: WAM_EVAL_ENTRY, value: "run_trossen_kickstart.py"}
+            - {name: WAM_EVAL_ENTRY, value: "dagger_rollout_relabel.py"}
             - {name: EVAL_JOBS_CONFIG, value: "__CONFIG__"}
             - {name: DZ_HOST, value: "dreamzero-trossen-inference-rt"}
             - {name: DZ_PORT, value: "8001"}
-            - {name: WAM_KICK_CONFIGS, value: '[["scripted_toward",0,0]]'}
-            - {name: WAM_KICK_EPISODES, value: "8"}
-            - {name: WAM_EVAL_MAX_STEPS, value: "150"}
-            - {name: WAM_RESET_JITTER, value: "0.05"}
-            # solvable scene (matches the scripted-expert scene): bin in the left arm's workspace
+            - {name: WAM_DAGGER_BETA, value: "0.5"}
+            - {name: WAM_DAGGER_EPISODES, value: "__EPISODES__"}
+            - {name: WAM_MAX_STEPS, value: "160"}
+            - {name: WAM_ARM_JITTER, value: "0.10"}
+            - {name: WAM_RESET_JITTER, value: "0.04"}
+            - {name: WAM_EP_SEED_BASE, value: "__SEEDBASE__"}
+            - {name: WAM_EXPERT_OUT, value: "/data/wam/datasets/dagger_r1/__TAG__"}
+            - {name: WAM_EVAL_NO_WEAVE, value: "1"}
+            # solvable scene (matches the eval + round-0 demo scene)
             - {name: WAM_TABLE_X, value: "0.20"}
             - {name: WAM_CUBE_X, value: "0.55"}
             - {name: WAM_CUBE_Y, value: "0.15"}
             - {name: WAM_BOWL_X, value: "0.56"}
             - {name: WAM_BOWL_Y, value: "-0.06"}
             - {name: WAM_EVAL_SRC, value: "/data/src/dreamzero-wam/eval"}
-            # Per-episode rollout video -> Weave trace (unique dir per job so concurrent cyl/batt
-            # jobs never clobber each other's episode_N.mp4; PVC-backed so it survives the pod).
-            - {name: WAM_EVAL_VIDEO, value: "1"}
-            - {name: WAM_EVAL_VIDEO_DIR, value: "/data/wam/eval_videos/__TAG__"}
             - {name: PYTHONUNBUFFERED, value: "1"}
-            # Weave/W&B results tracing (override WEAVE_MODEL per checkpoint at launch)
-            - {name: WANDB_ENTITY,  value: "encord-wb-physical-ai"}
-            - {name: WEAVE_PROJECT, value: "wam-finetune-webinar"}
-            - {name: WEAVE_MODEL,   value: "__MODEL__"}
           envFrom: [{secretRef: {name: wandb-api-key}}]
           resources:
             requests: {cpu: "8", memory: 64Gi, nvidia.com/gpu: "1"}

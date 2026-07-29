@@ -1,0 +1,64 @@
+# Assemble v11 = v10 (real v8 + clean round-0 demos) + ON-POLICY round-1 corrective demos (x WAM_R1_DUP),
+# recompute stats + step_filter, log round-1 demos as a W&B artifact. CPU node. Prereq: round-1 episodes
+# under /data/wam/datasets/dagger_r1/{cyl,batt}/data/. WAM_R1_DUP is filled by the orchestrator to target
+# ~5% of v10 training FRAMES (frame-uniform sampling), well above round-0's footprint, capped so it can't
+# swamp the world-model/video quality.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wam-encord-dagger-v11
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-data"}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-data"}
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: nvidia.com/gpu.product, operator: DoesNotExist}
+                  - {key: kubernetes.io/arch, operator: In, values: [amd64]}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: assemble
+          image: python:3.12-slim
+          command: ["/bin/bash", "-exo", "pipefail", "-c"]
+          args:
+            - |
+              export HOME=/data/.home-amd64 PIP_CACHE_DIR=/data/.home-amd64/.pip TMPDIR=/data/.home-amd64/.tmp
+              export WANDB_DIR=/data/.home-amd64/.wandb WAM_REPO_ROOT=/data/src/dreamzero-wam
+              mkdir -p $HOME $PIP_CACHE_DIR $TMPDIR $WANDB_DIR
+              python -m pip install --no-cache-dir --quiet "wandb>=0.18.0" pandas pyarrow numpy tqdm
+              cd $WAM_REPO_ROOT
+              python scripts/data/assemble_dagger_v11.py
+              python - <<'PY'
+              import json
+              v10=json.load(open("/data/wam/datasets/encord_trossen_v10/meta/info.json"))
+              v11=json.load(open("/data/wam/datasets/encord_trossen_v11/meta/info.json"))
+              print("=== v10:", v10["total_episodes"],"eps", v10["total_frames"],"frames")
+              print("=== v11:", v11["total_episodes"],"eps", v11["total_frames"],"frames", "tasks",v11["total_tasks"])
+              added_eps=v11["total_episodes"]-v10["total_episodes"]; added_fr=v11["total_frames"]-v10["total_frames"]
+              print("=== round-1 added:", added_eps,"eps", added_fr,"frames =%.2f%% of v11 frames"%(100*added_fr/v11["total_frames"]))
+              assert added_eps>0 and added_fr>0 and v11["total_episodes"]>v10["total_episodes"] and v11["fps"], (v10,v11)
+              PY
+              echo "=== v11 assemble done ==="
+          envFrom: [{secretRef: {name: wandb-api-key}}]
+          env:
+            - {name: WANDB_ENTITY,  value: encord-wb-physical-ai}
+            - {name: WANDB_PROJECT, value: wam-finetune-webinar}
+            - {name: WAM_R1_DUP,    value: "__R1DUP__"}
+            - {name: WAM_R1_GROUPS, value: "cyl,batt"}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: ["ALL"]}}
+          resources:
+            requests: {cpu: "8", memory: 32Gi}
+            limits:   {cpu: "16", memory: 96Gi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: dreamzero-data}}

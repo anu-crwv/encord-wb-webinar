@@ -1,0 +1,78 @@
+# Download encord-source-data:v7 (668 real captioned episodes, 7 new stationary tasks) to /checkpoints
+# (the /data PVC has only 71GB free; /checkpoints has 271GB). Selective 3-camera subset (drop cam_low,
+# which our schema never uses) -> ~130GB instead of 175GB. skip_cache + resume-skip make retries cheap.
+# Runs on a healthy amd64 CPU node (g3614da/g463644). Root (namespace allows it) so pip install works;
+# files land world-readable so the uid-1000 training pod can read them via symlink from the v13 dataset.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wam-v7-download
+  namespace: dreamzero
+  labels: {app.kubernetes.io/part-of: dreamzero, dreamzero/gate: "wam-data"}
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 259200
+  template:
+    metadata:
+      labels: {app: wam-v7-download, app.kubernetes.io/part-of: dreamzero}
+    spec:
+      restartPolicy: Never
+      nodeSelector: {kubernetes.io/arch: amd64}
+      containers:
+        - name: dl
+          image: python:3.12
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-ec"]
+          args:
+            - |
+              pip install -q 'wandb>=0.18'
+              mkdir -p /checkpoints/wam/v7raw
+              python3 - <<'PYEOF'
+              import wandb, os
+              from concurrent.futures import ThreadPoolExecutor, as_completed
+              api = wandb.Api()
+              a = api.artifact("encord-wb-physical-ai/wam-finetune-webinar/encord-source-data:v7")
+              root = "/checkpoints/wam/v7raw"
+              man = a.manifest.entries
+              # 3-camera subset: drop cam_low (never mapped into our 16-dim schema)
+              want = [n for n in man if "/observation.images.cam_low/" not in n]
+              def have(n):
+                  p = os.path.join(root, n)
+                  try:
+                      return os.path.exists(p) and os.path.getsize(p) == (man[n].size or -1)
+                  except OSError:
+                      return False
+              todo = [n for n in want if not have(n)]
+              print(f"[v7dl] entries: {len(man)} total, {len(want)} in 3-cam subset, {len(todo)} to fetch (rest resumed)", flush=True)
+              def dl(n):
+                  try:
+                      try:
+                          a.get_entry(n).download(root=root, skip_cache=True)
+                      except TypeError:
+                          a.get_entry(n).download(root=root)
+                      return None
+                  except Exception as e:
+                      return f"{n}: {type(e).__name__}: {e}"
+              ok = fail = 0; errs = []
+              with ThreadPoolExecutor(max_workers=12) as ex:
+                  for f in as_completed([ex.submit(dl, n) for n in todo]):
+                      r = f.result()
+                      if r: fail += 1; errs.append(r)
+                      else: ok += 1
+                      if (ok + fail) % 400 == 0:
+                          print(f"[v7dl] {ok+fail}/{len(todo)} ok={ok} fail={fail}", flush=True)
+              print(f"[v7dl] DONE ok={ok} fail={fail} (skipped {len(want)-len(todo)} already present)", flush=True)
+              for e in errs[:20]: print("[v7dl] ERR", e, flush=True)
+              import sys; sys.exit(1 if fail else 0)
+              PYEOF
+          envFrom: [{secretRef: {name: wandb-api-key}}]
+          env:
+            - {name: WANDB_ENTITY, value: encord-wb-physical-ai}
+            - {name: HOME, value: /tmp}
+          resources:
+            requests: {cpu: "4", memory: 12Gi}
+            limits:   {cpu: "16", memory: 32Gi}
+          volumeMounts:
+            - {name: checkpoints, mountPath: /checkpoints}
+      volumes:
+        - {name: checkpoints, persistentVolumeClaim: {claimName: dreamzero-checkpoints}}
