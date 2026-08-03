@@ -2,6 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "pyyaml",
+#     "tqdm",
 #     "typer",
 # ]
 # ///
@@ -13,11 +14,11 @@ import importlib.util
 from pathlib import Path
 
 
-SCRIPT_PATH = Path(__file__).with_name("export_single_view_labels_to_wandb.py")
+SCRIPT_PATH = Path(__file__).with_name("export_labels_to_wandb.py")
 
 
 def load_exporter_module():
-    spec = importlib.util.spec_from_file_location("export_single_view_labels_to_wandb", SCRIPT_PATH)
+    spec = importlib.util.spec_from_file_location("export_labels_to_wandb", SCRIPT_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load module from {SCRIPT_PATH}")
     module = importlib.util.module_from_spec(spec)

@@ -42,6 +42,18 @@ Applies metadata from `registration.json` to files already loaded by a Cloud Syn
 `load_registration_json.py`  
 Older direct-registration path for loading a JSON into an Encord storage folder. Prefer Cloud Synced Folders for this dataset.
 
+`upload_cached_s3_folder_to_encord.py`
+Uploads a local folder from the shared S3 cache into an existing Encord storage folder. It preserves S3-derived titles and client metadata. When `episode_*` folders are present, it skips incomplete episodes by default; each episode needs the four `meta/*` files and at least 3 visible videos.
+
+`upload_wandb_artifact_to_encord.py`
+Imports videos from a W&B dataset artifact into an existing Encord storage folder as individual video items, not data groups. By default it uses `source_artifact_name:latest` from `wandb_config.yaml`, downloads videos into `exports/encord-wandb-import/`, and preserves exported client metadata from `dataset/meta/source_dataset_items.json` when that sidecar exists. Use `--max-download-workers` for parallel W&B downloads and `--max-workers` for parallel Encord uploads.
+
+`dataset-export/recover_encord_project_from_r2_mcaps.py`
+Reads a data-group Encord project, resolves the corresponding MCAP objects in `trossen-robotics-data`,
+downloads them into the shared R2 cache, and concurrently extracts upload-ready three-camera episodes in
+separate processes. The generated `file_map.json` preserves original item metadata and custom data-group
+composition for `upload_cached_s3_folder_to_encord.py`.
+
 `create_metadata_schema.py`  
 Compatibility wrapper. Prefer `update_metadata_schema.py`.
 
@@ -111,7 +123,7 @@ dataset/.../data/...
 It requires the exact source dataset artifact it overlays:
 
 ```bash
-uv run --script scripts/encord/label-export/export_single_view_labels_to_wandb.py \
+uv run --script scripts/encord/label-export/export_labels_to_wandb.py \
   --metadata-yaml scripts/encord/label-export/export_metadata.yaml \
   --source-artifact-ref encord-source-data:vN
 ```

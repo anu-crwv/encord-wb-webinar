@@ -1,7 +1,7 @@
-description: "1364 SRS episodes. Same structure as v4. Production-ready"
+description: "Additional training data - trossen stationary"
 tags:
-  - latest
   - source-data
-  - v5
+  - latest
+  - v7
   - production-ready
-  - 1500 episodes
+  - 610 episodes
