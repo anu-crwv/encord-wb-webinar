@@ -36,7 +36,7 @@ just the Trossen model.
 | Reusable building block | Where | What a future project reuses |
 |---|---|---|
 | **W&B training harness** | [`wam/`](wam/) | Artifact-driven, embodiment-agnostic fine-tuning of the 14B WAM. Swap the dataset artifact / data-config and the same harness (ZeRO-3 fit, lineage, Registry linking, checkpoint upload) trains a *different* robot. |
-| **Data pipeline** | [`scripts/encord/`](scripts/encord/) · [`scripts/data/`](scripts/data/) · [`wam/artifacts/`](wam/artifacts/) | A prepared Encord dataset and caption project become **one versioned W&B LeRobot dataset**. Source videos stay in S3 and are tracked by reference. |
+| **Data pipeline** | [`scripts/encord/`](scripts/encord/) · [`scripts/data/`](scripts/data/) · [`wam/artifacts/`](wam/artifacts/) | Raw three-camera Encord episodes can be grouped, captioned from metadata, arm motion, or Gemini, reproducibly sampled, and exported as **one versioned W&B LeRobot dataset**. Source videos stay in S3 and can be registered back in Encord by reference. |
 | **Evaluation environments** | [`eval/isaaclab_arena_dreamzero/`](eval/isaaclab_arena_dreamzero/) | A **new bimanual embodiment, scene, task, policy adapter, inference server, and Weave layer** for Isaac Lab–Arena — none of which shipped upstream. Reusable for any DreamZero-family policy; the embodiment module is a template for the next robot. |
 
 See **[Reusing this for a new embodiment](#reusing-this-for-a-new-embodiment)** for the concrete recipe.
@@ -50,11 +50,13 @@ of our logic is additive: the [`wam/`](wam/) package, the [`eval/`](eval/) suite
 ## What you get
 
 ```
-   Encord dataset + captions                   base models (HF)
-        │  scripts/encord/export_to_wandb.py         │  wam/artifacts/bootstrap_models.py
-        │  S3 videos stay external references        ▼
-        ▼                                       W&B model artifacts  (Wan2.1-I2V-14B, umt5-xxl,
-   W&B train-ready dataset artifact             DreamZero-AgiBot)  → reference → PVC + Registry
+   Raw Encord episodes                         base models (HF)
+        │  group → caption → optional sample         │  wam/artifacts/bootstrap_models.py
+        │  scripts/encord/                           ▼
+        │  export_to_wandb.py                   W&B model artifacts  (Wan2.1-I2V-14B, umt5-xxl,
+        │  S3 videos stay external references        DreamZero-AgiBot)  → reference → PVC + Registry
+        ▼                                             │
+   W&B train-ready dataset artifact                  │
    (LeRobot data + metadata + provenance)             │
         │                                             │
         └──────────────────────────────────┐          │
@@ -94,8 +96,9 @@ up side-by-side to answer *"did better data actually make a better policy?"*
   ```bash
   kubectl -n <YOUR_NAMESPACE> get secret wandb-api-key   # should exist
   ```
-- **Encord** (data pipeline only) — an Encord SSH private-key file and AWS credentials that can read the
-  prepared dataset's S3 metadata and Parquet objects. Pass the key path directly to the exporter.
+- **Encord** (data pipeline only) — an Encord SSH private-key file. Export also needs AWS credentials
+  that can read the prepared dataset's S3 metadata and Parquet objects. Pass the key path directly to
+  each Encord command.
 - **Cluster resources (already provisioned)** — your namespace; RWX PVCs `dreamzero-data` (datasets,
   caches) and `dreamzero-checkpoints` (weights, run outputs); 2× `NVIDIA-GH200-480GB` GPU nodes (arm64) for
   training + the policy server; `NVIDIA-RTX-PRO-6000` (amd64) nodes for Isaac Sim rendering; amd64 CPU nodes
@@ -192,11 +195,39 @@ base models.
 
 ## The Encord data pipeline
 
-Real Trossen data lives in **Encord**, backed by S3. Given a prepared three-camera data-group dataset and
-its caption project, one command validates the complete dataset and publishes **one versioned,
-train-ready W&B LeRobot artifact** with source and label provenance. The source video bytes are never
-downloaded or re-uploaded: W&B tracks their `s3://` objects as external references. Full details and the
-fixed webinar data contract are in [`scripts/encord/README.md`](scripts/encord/README.md).
+Real Trossen data lives in **Encord**, backed by S3. The public workflow keeps the useful curation steps:
+it joins raw storage items into validated three-camera data groups, creates the caption ontology and
+dataset-attached project from a public JSON contract, creates deterministic language instructions from
+an editable task map, optionally enriches the third instruction from left/right arm motion, refines them
+with the restored
+[Gemini caption agent](scripts/encord/captioning/gemini_caption_agent/), and can create a reproducible
+metadata-balanced dataset. The export command then validates the complete caption project and publishes
+**one versioned, train-ready W&B LeRobot artifact** with source and label provenance. During grouping and
+sampling, existing Encord items are reused rather than copied. During export, source video bytes are never
+downloaded or re-uploaded: W&B tracks their `s3://` objects as external references. A small reverse bridge
+can register those same references in a new Encord dataset without downloading the W&B artifact or its
+videos. Full commands and the fixed webinar contracts are in
+[`scripts/encord/README.md`](scripts/encord/README.md).
+
+```bash
+# Build the three-camera grouped dataset.
+uv run --script scripts/encord/create_data_groups_from_raw_folder.py \
+  --ssh-key-file /path/to/encord-key \
+  --source-folder-id <raw-folder-id> \
+  --output-dataset-title "Trossen grouped demonstrations"
+
+# Create the three-field caption ontology and dataset-attached project.
+uv run --script scripts/encord/captioning/create_caption_ontology.py \
+  --ssh-key-file /path/to/encord-key \
+  --dataset-hash <dataset-id> \
+  --project-title "Trossen Captioning"
+
+# Seed the caption project from task metadata before optional Gemini refinement.
+uv run --script scripts/encord/captioning/create_captions_from_metadata.py \
+  --ssh-key-file /path/to/encord-key \
+  --project-hash <project-id> \
+  --infer-active-arm
+```
 
 ```bash
 uv run --script scripts/encord/export_to_wandb.py \
@@ -204,13 +235,12 @@ uv run --script scripts/encord/export_to_wandb.py \
   --dataset-hash <dataset-id> \
   --project-hash <project-id> \
   --wandb-entity <YOUR_WANDB_ENTITY> \
-  --wandb-project <YOUR_WANDB_PROJECT> \
-  --apply
+  --wandb-project <YOUR_WANDB_PROJECT>
 ```
 
-Omit `--apply` to validate without creating a W&B run, or add `--limit 3` for a three-episode smoke. The
-exporter reads small source metadata/Parquet objects, builds generated files in an auto-deleted temporary
-directory, and publishes only after every episode passes validation. Downstream curation experiments in
+Add `--limit 3` for a small three-episode artifact. The exporter reads source metadata/Parquet objects,
+builds generated files in an auto-deleted temporary directory, and publishes only after every episode
+passes validation. Downstream curation experiments in
 [`scripts/data/`](scripts/data/) can still mix the resulting train-ready dataset with community or
 corrective data.
 
@@ -322,7 +352,7 @@ dreamzero-wam/
 │   ├── train.py                # artifact-driven training entrypoint
 │   └── _ds_*.py                # ZeRO-3 compatibility shims (VAE leaf modules, ckpt routing, launch)
 ├── scripts/
-│   ├── encord/                 # one-command Encord → W&B reference export (see its README)
+│   ├── encord/                 # Encord curation, caption projects, and W&B reference bridge
 │   ├── data/                   # assemble_*.py (dataset curation) + LeRobot↔GEAR converters
 │   └── train/                  # encord_trossen.sh, droid_pickplace.sh
 ├── eval/                       # the Trossen eval suite (authored from scratch — see eval/README.md)

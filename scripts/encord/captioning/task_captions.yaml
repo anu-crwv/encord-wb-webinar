@@ -1,0 +1,50 @@
+tasks:
+  "Pour nuts & bolts":
+    canonical: "pour the nuts and bolts into the tray"
+    paraphrase: "empty the nuts and bolts into the tray"
+    arm_template: "use {arm_phrase} to pour the nuts and bolts into the tray"
+
+  "Batteries":
+    canonical: "place the batteries into the tray"
+    paraphrase: "put the batteries in the tray"
+    arm_template: "use {arm_phrase} to place the batteries into the tray"
+
+  "Pour Coffee 2":
+    canonical: "pour the coffee into the cup"
+    paraphrase: "pour coffee into the cup"
+    arm_template: "use {arm_phrase} to pour the coffee into the cup"
+
+  "Sort glue by type":
+    canonical: "sort the glue bottles by type"
+    paraphrase: "group the glue bottles by type"
+    arm_template: "use {arm_phrase} to sort the glue bottles by type"
+
+  "Sort tape & safety glasses (2)":
+    canonical: "sort the tape and safety glasses"
+    paraphrase: "separate the tape and safety glasses"
+    arm_template: "use {arm_phrase} to sort the tape and safety glasses"
+
+  "Microfiber towels":
+    canonical: "fold the microfiber towels"
+    paraphrase: "fold the towels"
+    arm_template: "use {arm_phrase} to fold the microfiber towels"
+
+  "Coil wire":
+    canonical: "coil the wire"
+    paraphrase: "wind the wire into a coil"
+    arm_template: "use {arm_phrase} to coil the wire"
+
+  "Plug ethernet cable into network device":
+    canonical: "plug the ethernet cable into the network switch"
+    paraphrase: "connect the ethernet cable to the network switch"
+    arm_template: "use {arm_phrase} to plug the ethernet cable into the network switch"
+
+  "Plug ethernet cable into network device 2":
+    canonical: "plug the ethernet cable into the network switch"
+    paraphrase: "connect the ethernet cable to the network switch"
+    arm_template: "use {arm_phrase} to plug the ethernet cable into the network switch"
+
+  "Plug ethernet cable into network switch 3":
+    canonical: "plug the ethernet cable into the network switch"
+    paraphrase: "connect the ethernet cable to the network switch"
+    arm_template: "use {arm_phrase} to plug the ethernet cable into the network switch"

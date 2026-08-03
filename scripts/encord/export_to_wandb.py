@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -444,16 +443,13 @@ def run_export(
     aws_profile: str | None,
     domain: str | None,
     limit: int | None,
-    apply: bool,
-    client_factory: Callable[[str, str | None], Any] = create_encord_client,
-    s3_factory: Callable[[str | None], Any] = create_s3_client,
-) -> dict[str, Any]:
+) -> None:
     if not ssh_key_file.is_file():
         raise typer.BadParameter(f"Encord SSH private key does not exist: {ssh_key_file}")
     if not aliases or any(not alias.strip() for alias in aliases):
         raise typer.BadParameter("At least one non-empty W&B artifact alias is required")
 
-    client = client_factory(str(ssh_key_file), domain)
+    client = create_encord_client(str(ssh_key_file), domain)
     dataset = client.get_dataset(dataset_hash)
     project = client.get_project(project_hash)
     validate_project_dataset(project, dataset_hash)
@@ -462,7 +458,11 @@ def run_export(
 
     with TemporaryDirectory(prefix="encord-wandb-") as temporary_directory:
         output_root = Path(temporary_directory)
-        references, summary = build_train_ready_dataset(plans, output_root, s3_factory(aws_profile))
+        references, summary = build_train_ready_dataset(
+            plans,
+            output_root,
+            create_s3_client(aws_profile),
+        )
         manifest = build_export_manifest(
             plans=plans,
             summary=summary,
@@ -477,10 +477,6 @@ def run_export(
             f"Validated {summary['episode_count']} episodes, {summary['frame_count']} frames, "
             f"and {summary['video_reference_count']} S3 video references."
         )
-        if not apply:
-            typer.echo("Validation complete. Pass --apply to publish the W&B artifact.")
-            return manifest
-
         qualified_name, run_url = publish_artifact(
             output_root=output_root,
             references=references,
@@ -493,7 +489,6 @@ def run_export(
         typer.echo(f"Artifact: {qualified_name}")
         if run_url:
             typer.echo(f"Run: {run_url}")
-        return manifest
 
 
 def main(
@@ -515,11 +510,8 @@ def main(
         str | None, typer.Option(help="Optional Encord API domain, for example the US deployment.")
     ] = None,
     limit: Annotated[
-        int | None, typer.Option(min=1, help="Maximum episodes for a validation or publish smoke run.")
+        int | None, typer.Option(min=1, help="Maximum episodes for a small publish run.")
     ] = None,
-    apply: Annotated[
-        bool, typer.Option("--apply", help="Publish after the complete dataset passes validation.")
-    ] = False,
 ) -> None:
     run_export(
         ssh_key_file=ssh_key_file,
@@ -532,7 +524,6 @@ def main(
         aws_profile=aws_profile,
         domain=domain,
         limit=limit,
-        apply=apply,
     )
 
 

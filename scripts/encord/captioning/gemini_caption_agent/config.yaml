@@ -1,0 +1,37 @@
+project_hash: "<project-hash>"
+
+# Workflow stage and outgoing pathways for the local Encord task agent.
+agent_stage_name: "Gemini Captioning"
+success_pathway: "success"
+failure_pathway: "failure"
+metadata_mismatch_pathway: "human_review"
+
+# Gemini settings. Put the actual key in your shell or in this folder's ignored .env.
+gemini_api_key_env_var: "GEMINI_API_KEY"
+gemini_model: "gemini-2.5-flash"
+temperature: 0.0
+max_output_tokens: 8192
+file_processing_timeout_seconds: 300
+keep_uploaded_files: false
+
+caption_titles:
+  - "Language Instruction 1"
+  - "Language Instruction 2"
+  - "Language Instruction 3"
+
+# Exact client-metadata key that contains the expected task name.
+# The agent does not scan aliases or infer task names from paths.
+metadata_task_key: "task_name"
+
+# Which video child to send to Gemini when the task is a data group.
+# Current Trossen data groups use camera_cam_high for the high/exterior camera.
+# If this layout is missing, the agent sends a random video child and routes the task to human_review.
+video_layout: "camera_cam_high"
+
+overwrite: false
+
+# Keep one task in memory at a time. Re-run the command to process newly queued tasks.
+task_batch_size: 1
+
+max_tasks_per_stage: null
+refresh_every: null

@@ -1,0 +1,21 @@
+{
+  "title": "Robot Language Instructions",
+  "description": "Three free-text language instructions for robot demonstration episodes.",
+  "classifications": [
+    {
+      "name": "Language Instruction 1",
+      "type": "text",
+      "required": false
+    },
+    {
+      "name": "Language Instruction 2",
+      "type": "text",
+      "required": false
+    },
+    {
+      "name": "Language Instruction 3",
+      "type": "text",
+      "required": false
+    }
+  ]
+}
