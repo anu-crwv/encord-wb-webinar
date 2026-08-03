@@ -3,6 +3,7 @@
 # dependencies = [
 #     "boto3",
 #     "botocore",
+#     "click",
 #     "encord @ git+ssh://git@github.com/encord-team/encord-client-python-private.git@b1edece2",
 #     "pyyaml",
 #     "tqdm",
@@ -16,15 +17,19 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+import errno
 import json
 import os
 from pathlib import Path
+import re
 import shutil
+import threading
 import time
 from typing import Annotated, Any
 from urllib.parse import unquote, urlparse
 from uuid import UUID, uuid4
 
+import click
 import typer
 import yaml
 from tqdm import tqdm
@@ -41,6 +46,8 @@ ENCORD_API_RETRY_BASE_SECONDS = 2.0
 S3_DOWNLOAD_MAX_ATTEMPTS = 4
 S3_DOWNLOAD_RETRY_BASE_SECONDS = 3.0
 CHUNK_SIZE = 1000
+WANDB_UPLOAD_HEARTBEAT_SECONDS = 60
+WANDB_TAG_RE = re.compile(r"^[-\w]+( +[-\w]+)*$")
 CAMERA_ORDER = ["cam_high", "cam_left_wrist", "cam_right_wrist"]
 CAMERA_TO_DROID_KEY = {
     "cam_high": "exterior_image_1_left",
@@ -74,10 +81,21 @@ def required(config: dict[str, Any], key: str, label: str) -> Any:
 def configured_tags(config: dict[str, Any]) -> list[str]:
     tags = config.get("tags") or []
     if isinstance(tags, str):
-        return [tags]
-    if not isinstance(tags, list):
+        tag_list = [tags]
+    elif isinstance(tags, list):
+        tag_list = [str(tag) for tag in tags]
+    else:
         raise typer.BadParameter("Dataset export config tags must be a list or string.")
-    return [str(tag) for tag in tags]
+
+    invalid_tags = [tag for tag in tag_list if not WANDB_TAG_RE.match(tag)]
+    if invalid_tags:
+        invalid = ", ".join(repr(tag) for tag in invalid_tags)
+        raise typer.BadParameter(
+            "Invalid W&B artifact tag(s) in Dataset export config: "
+            f"{invalid}. Tags may contain only alphanumeric characters, underscores, "
+            "hyphens, and spaces. For example: '1500 episodes' or '1-5k episodes'."
+        )
+    return list(dict.fromkeys(tag_list))
 
 
 def configured_description(config: dict[str, Any], summary: dict[str, Any]) -> str:
@@ -894,6 +912,101 @@ def local_artifact_files(output_dir: Path) -> list[Path]:
     return sorted(path for path in dataset_dir.rglob("*") if path.is_file())
 
 
+def format_bytes(byte_count: int) -> str:
+    value = float(byte_count)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            return f"{value:.1f} {unit}" if unit != "B" else f"{byte_count} B"
+        value /= 1024
+    return f"{byte_count} B"
+
+
+def local_artifact_size(output_dir: Path) -> tuple[int, int]:
+    file_count = 0
+    total_bytes = 0
+    for path in local_artifact_files(output_dir):
+        file_count += 1
+        total_bytes += path.stat().st_size
+    return file_count, total_bytes
+
+
+def has_errno(exc: BaseException, errnum: int) -> bool:
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, OSError) and current.errno == errnum:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def wandb_data_dir_hint() -> str:
+    configured = os.environ.get("WANDB_DATA_DIR")
+    if configured:
+        return str(Path(configured).expanduser())
+    return "the default W&B data directory, usually ~/Library/Application Support/wandb on macOS"
+
+
+def format_duration(seconds: float) -> str:
+    remaining = int(seconds)
+    hours, remaining = divmod(remaining, 3600)
+    minutes, seconds = divmod(remaining, 60)
+    if hours:
+        return f"{hours}h {minutes}m {seconds}s"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def add_files_to_artifact(artifact: Any, paths: list[Path], output_dir: Path, label: str) -> None:
+    if not paths:
+        return
+    for path in tqdm(paths, desc=label, unit="file", dynamic_ncols=True):
+        artifact.add_file(
+            str(path),
+            name=path.relative_to(output_dir).as_posix(),
+            policy="immutable",
+            skip_cache=True,
+        )
+
+
+def wait_for_wandb_artifact(
+    logged: Any,
+    *,
+    file_count: int,
+    total_bytes: int,
+    run_url: str | None,
+    heartbeat_seconds: int,
+) -> None:
+    started_at = time.monotonic()
+    stop = threading.Event()
+    heartbeat_thread: threading.Thread | None = None
+
+    def print_heartbeat() -> None:
+        while not stop.wait(heartbeat_seconds):
+            elapsed = format_duration(time.monotonic() - started_at)
+            typer.echo(
+                "Still waiting for W&B artifact upload/finalization "
+                f"after {elapsed} ({file_count:,} files, {format_bytes(total_bytes)}). "
+                f"Run: {run_url or 'not available yet'}"
+            )
+
+    if heartbeat_seconds > 0:
+        heartbeat_thread = threading.Thread(target=print_heartbeat, daemon=True)
+        heartbeat_thread.start()
+
+    try:
+        logged.wait()
+    finally:
+        stop.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=1)
+
+    elapsed = format_duration(time.monotonic() - started_at)
+    typer.echo(f"W&B artifact upload/finalization completed after {elapsed}.")
+
+
 def log_to_wandb(
     *,
     wandb_config: dict[str, Any],
@@ -902,6 +1015,7 @@ def log_to_wandb(
     tags: list[str],
     description: str,
     base_artifact: dict[str, Any] | None,
+    upload_heartbeat_seconds: int,
 ) -> dict[str, str]:
     import wandb
 
@@ -913,36 +1027,73 @@ def log_to_wandb(
         f"{str(summary['encord_dataset_hash'])[:8]}-{summary['episode_count']}eps"
     )
 
-    with wandb.init(entity=entity, project=project, job_type="encord-dataset-export", name=run_name) as run:
-        if base_artifact is None:
-            artifact = wandb.Artifact(
-                artifact_name,
-                type="dataset",
-                metadata=summary,
-                description=description,
+    file_count, total_bytes = local_artifact_size(output_dir)
+    typer.echo(f"Preparing W&B artifact with {file_count:,} files ({format_bytes(total_bytes)}).")
+    typer.echo("Using immutable W&B artifact entries to avoid duplicating videos into local staging.")
+    if upload_heartbeat_seconds > 0:
+        typer.echo(f"Will print W&B upload/finalization heartbeat every {upload_heartbeat_seconds}s.")
+
+    try:
+        with wandb.init(entity=entity, project=project, job_type="encord-dataset-export", name=run_name) as run:
+            if base_artifact is None:
+                artifact = wandb.Artifact(
+                    artifact_name,
+                    type="dataset",
+                    metadata=summary,
+                    description=description,
+                )
+                add_files_to_artifact(
+                    artifact,
+                    local_artifact_files(output_dir),
+                    output_dir,
+                    "Registering artifact files",
+                )
+                logged = run.log_artifact(artifact, aliases=["latest"], tags=tags)
+            else:
+                typer.echo(f"Using base dataset artifact {base_artifact['resolved_ref']}.")
+                saved = run.use_artifact(base_artifact["resolved_ref"])
+                draft = saved.new_draft()
+                draft.metadata.update(summary)
+                draft.description = description
+
+                for entry_name in META_ENTRY_PATHS:
+                    draft.remove(entry_name)
+                add_files_to_artifact(
+                    draft,
+                    [output_dir / entry_name for entry_name in META_ENTRY_PATHS],
+                    output_dir,
+                    "Registering metadata files",
+                )
+
+                new_files = [
+                    path
+                    for path in local_artifact_files(output_dir)
+                    if "dataset/meta" not in path.as_posix()
+                ]
+                typer.echo(f"Adding {len(new_files)} new artifact files to incremental draft...")
+                add_files_to_artifact(draft, new_files, output_dir, "Registering new artifact files")
+                logged = run.log_artifact(draft, aliases=["latest"], tags=tags)
+
+            wait_for_wandb_artifact(
+                logged,
+                file_count=file_count,
+                total_bytes=total_bytes,
+                run_url=run.url,
+                heartbeat_seconds=upload_heartbeat_seconds,
             )
-            artifact.add_dir(str(output_dir / "dataset"), name="dataset")
-            logged = run.log_artifact(artifact, aliases=["latest"], tags=tags)
-        else:
-            typer.echo(f"Using base dataset artifact {base_artifact['resolved_ref']}.")
-            saved = run.use_artifact(base_artifact["resolved_ref"])
-            draft = saved.new_draft()
-            draft.metadata.update(summary)
-            draft.description = description
-
-            for entry_name in META_ENTRY_PATHS:
-                draft.remove(entry_name)
-                draft.add_file(str(output_dir / entry_name), name=entry_name)
-
-            new_files = [path for path in local_artifact_files(output_dir) if "dataset/meta" not in path.as_posix()]
-            typer.echo(f"Adding {len(new_files)} new artifact files to incremental draft...")
-            for path in new_files:
-                draft.add_file(str(path), name=path.relative_to(output_dir).as_posix())
-            logged = run.log_artifact(draft, aliases=["latest"], tags=tags)
-
-        logged.wait()
-        artifact_ref = f"{artifact_name}:{logged.version}"
-        return {"dataset_artifact": artifact_ref, "run_url": run.url}
+            artifact_ref = f"{artifact_name}:{logged.version}"
+            return {"dataset_artifact": artifact_ref, "run_url": run.url}
+    except OSError as exc:
+        if has_errno(exc, errno.ENOSPC):
+            raise click.ClickException(
+                "W&B ran out of local disk space while preparing the artifact. "
+                f"This export contains {file_count:,} files totaling {format_bytes(total_bytes)}. "
+                f"Set WANDB_DATA_DIR to a directory with enough free space and rerun; current target is "
+                f"{wandb_data_dir_hint()}. Example: "
+                "WANDB_DATA_DIR=/Volumes/big-disk/wandb-data uv run --script "
+                "scripts/encord/dataset-export/export_encord_dataset_to_wandb.py ..."
+            ) from exc
+        raise
 
 
 def main(
@@ -955,9 +1106,17 @@ def main(
         str | None,
         typer.Option(help="Existing W&B dataset artifact version to append to incrementally."),
     ] = None,
+    wandb_upload_heartbeat_seconds: Annotated[
+        int,
+        typer.Option(help="Seconds between W&B artifact upload/finalization heartbeat messages; set 0 to disable."),
+    ] = WANDB_UPLOAD_HEARTBEAT_SECONDS,
 ) -> None:
-    wandb_settings = load_yaml(wandb_config, "W&B config")
+    if wandb_upload_heartbeat_seconds < 0:
+        raise typer.BadParameter("W&B upload heartbeat seconds must be 0 or greater.")
+
     export_settings = load_yaml(export_config, "Dataset export config")
+    tags = configured_tags(export_settings)
+    wandb_settings = load_yaml(wandb_config, "W&B config")
     output_dir = make_output_dir()
     typer.echo(f"Writing local export to {output_dir}")
 
@@ -989,9 +1148,10 @@ def main(
         wandb_config=wandb_settings,
         output_dir=output_dir,
         summary=summary,
-        tags=configured_tags(export_settings),
+        tags=tags,
         description=configured_description(export_settings, summary),
         base_artifact=base_artifact,
+        upload_heartbeat_seconds=wandb_upload_heartbeat_seconds,
     )
     write_json(output_dir / "wandb_lineage.json", lineage)
 

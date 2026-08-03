@@ -135,7 +135,7 @@ def infer_arm_phrase_from_arrays(
         return "the left arm"
     if right_score > left_score * dominance_ratio:
         return "the right arm"
-    return "both arms"
+    return "the robot arm"
 
 
 def infer_arm_phrase_from_table(table: Any) -> str:
