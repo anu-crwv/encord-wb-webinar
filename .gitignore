@@ -24,3 +24,10 @@ wandb/
 .vscode/
 *.swp
 exports/
+/AGENTS.md
+
+# local Encord webinar administration and generated migration state
+/ENCORD_WEBINAR_REPORT.md
+/scripts/encord/data-registration/apply_*_workspace_cleanup.cjs
+/scripts/encord/data-registration/encord_*_report.json
+/scripts/encord/data-registration/encord_*_state.json
