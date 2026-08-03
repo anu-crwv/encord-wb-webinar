@@ -7,6 +7,7 @@
 #     "numpy",
 #     "pyarrow",
 #     "pyyaml",
+#     "tqdm",
 #     "typer",
 #     "wandb>=0.18.0",
 # ]
@@ -15,16 +16,20 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from io import BytesIO
 import json
 import os
 from pathlib import Path
 import re
+import threading
+import time
 from typing import Annotated, Any
 from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
+from tqdm import tqdm
 import typer
 import yaml
 
@@ -36,6 +41,19 @@ DEFAULT_YAML_CONFIG = SCRIPT_DIR / "label_export_config.yaml"
 EXPORT_ROOT = REPO_ROOT / "exports/encord-label-export"
 S3_CACHE_ROOT = REPO_ROOT / "exports/encord-dataset-export" / "_cache" / "s3"
 CHUNK_SIZE = 1000
+S3_READ_CHUNK_SIZE = 8 * 1024 * 1024
+S3_AUTH_FALLBACK_CODES = {
+    "403",
+    "AccessDenied",
+    "ExpiredToken",
+    "Forbidden",
+    "InvalidAccessKeyId",
+    "InvalidToken",
+    "SignatureDoesNotMatch",
+    "TokenRefreshRequired",
+}
+WANDB_METADATA_DOWNLOAD_ATTEMPTS = 5
+WANDB_METADATA_DOWNLOAD_BASE_SECONDS = 2
 LANG_KEYS = [
     "annotation.language.language_instruction",
     "annotation.language.language_instruction_2",
@@ -125,14 +143,52 @@ def parse_s3_uri(uri: str) -> tuple[str, str]:
     raise ValueError(f"Unsupported S3 URI format: {uri}")
 
 
-def s3_client(unsigned: bool):
+def s3_client(unsigned: bool, aws_profile: str | None = None):
     import boto3
     from botocore import UNSIGNED
     from botocore.config import Config
 
     if unsigned:
         return boto3.client("s3", config=Config(signature_version=UNSIGNED))
+    if aws_profile:
+        return boto3.Session(profile_name=aws_profile).client("s3")
     return boto3.client("s3")
+
+
+class S3ClientWithUnsignedFallback:
+    def __init__(self, *, unsigned: bool, aws_profile: str | None) -> None:
+        self.aws_profile = None if unsigned else aws_profile
+        self.client = s3_client(unsigned=unsigned, aws_profile=aws_profile)
+        self.unsigned_client = self.client if unsigned else None
+        self.using_unsigned = unsigned
+        self.unsigned_fallback_used = False
+        self._warned_unsigned_fallback = False
+
+    def get_object(self, *, Bucket: str, Key: str) -> Any:
+        if self.using_unsigned:
+            return self.client.get_object(Bucket=Bucket, Key=Key)
+
+        try:
+            return self.client.get_object(Bucket=Bucket, Key=Key)
+        except Exception as exc:
+            code = s3_client_error_code(exc)
+            if code not in S3_AUTH_FALLBACK_CODES:
+                raise
+            if self.unsigned_client is None:
+                self.unsigned_client = s3_client(unsigned=True)
+            if not self._warned_unsigned_fallback:
+                profile_note = f" profile {self.aws_profile!r}" if self.aws_profile else ""
+                typer.echo(
+                    f"Warning: AWS credentials{profile_note} were rejected for source S3 reads "
+                    f"({code}); retrying with unsigned S3 requests.",
+                    err=True,
+                )
+                self._warned_unsigned_fallback = True
+            response = self.unsigned_client.get_object(Bucket=Bucket, Key=Key)
+            self.client = self.unsigned_client
+            self.using_unsigned = True
+            self.unsigned_fallback_used = True
+            return response
 
 
 def s3_cache_path(bucket: str, key: str) -> Path:
@@ -145,23 +201,178 @@ def s3_cache_path(bucket: str, key: str) -> Path:
     return S3_CACHE_ROOT / bucket / Path(*cache_parts)
 
 
-def read_s3_cached_bytes(client_s3: Any, uri: str) -> tuple[bytes, bool]:
+def s3_uri_cache_path(uri: str) -> tuple[str, str, Path]:
     bucket, key = parse_s3_uri(uri)
-    cache_path = s3_cache_path(bucket, key)
+    return bucket, key, s3_cache_path(bucket, key)
+
+
+def s3_client_error_code(exc: Exception) -> str | None:
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return None
+    error = response.get("Error") or {}
+    code = error.get("Code")
+    if code:
+        return str(code)
+    status = (response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
+    return str(status) if status else None
+
+
+def s3_download_error_message(
+    uri: str,
+    cache_path: Path,
+    exc: Exception,
+    aws_profile: str | None = None,
+) -> str:
+    code = s3_client_error_code(exc)
+    message = f"Could not download {uri} into shared S3 cache {cache_path}: {exc}"
+    if code in S3_AUTH_FALLBACK_CODES:
+        if aws_profile:
+            message += (
+                f" Tried AWS profile {aws_profile!r}. Run "
+                f"`aws sso login --profile {aws_profile}` and confirm that profile has s3:GetObject "
+                "access to this private source bucket."
+            )
+        else:
+            message += (
+                " If this is a private bucket, pass --aws-profile encord-robotics after "
+                "`aws sso login --profile encord-robotics`, and unset stale raw AWS credential "
+                "environment variables such as AWS_ACCESS_KEY_ID. If this is a public bucket, "
+                "rerun with --unsigned-s3 to bypass local AWS credentials."
+            )
+    return message
+
+
+def ensure_s3_cached(client_s3: Any, uri: str) -> tuple[Path, bool]:
+    bucket, key, cache_path = s3_uri_cache_path(uri)
     downloaded = False
 
     if not cache_path.exists():
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = cache_path.with_name(f".{cache_path.name}.{uuid4().hex}.tmp")
         try:
-            client_s3.download_file(bucket, key, str(tmp_path))
+            response = client_s3.get_object(Bucket=bucket, Key=key)
+            body = response["Body"]
+            try:
+                with tmp_path.open("wb") as file:
+                    for chunk in iter(lambda: body.read(S3_READ_CHUNK_SIZE), b""):
+                        file.write(chunk)
+            finally:
+                body.close()
             os.replace(tmp_path, cache_path)
             downloaded = True
+        except Exception as exc:
+            aws_profile = getattr(client_s3, "aws_profile", None)
+            raise RuntimeError(s3_download_error_message(uri, cache_path, exc, aws_profile)) from exc
         finally:
             if tmp_path.exists():
                 tmp_path.unlink()
 
+    return cache_path, downloaded
+
+
+def read_s3_cached_bytes(client_s3: Any, uri: str) -> tuple[bytes, bool]:
+    cache_path, downloaded = ensure_s3_cached(client_s3, uri)
     return cache_path.read_bytes(), downloaded
+
+
+def unique_values(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(values))
+
+
+def prefetch_s3_cache(
+    uris: list[str],
+    *,
+    unsigned_s3: bool,
+    aws_profile: str | None,
+    workers: int,
+) -> dict[str, Any]:
+    unique_uris = unique_values(uris)
+    if not unique_uris:
+        return {
+            "unique_uri_count": 0,
+            "cache_hits": 0,
+            "cache_downloads": 0,
+            "effective_unsigned": False,
+            "unsigned_fallback_used": False,
+        }
+
+    thread_state = threading.local()
+
+    def thread_client() -> S3ClientWithUnsignedFallback:
+        client = getattr(thread_state, "client", None)
+        if client is None:
+            client = S3ClientWithUnsignedFallback(unsigned=unsigned_s3, aws_profile=aws_profile)
+            thread_state.client = client
+        return client
+
+    def cache_one(uri: str) -> tuple[str, Path, bool, bool, bool]:
+        _, _, cache_path = s3_uri_cache_path(uri)
+        if cache_path.exists():
+            return uri, cache_path, False, False, False
+
+        client = thread_client()
+        cache_path, downloaded = ensure_s3_cached(client, uri)
+        return uri, cache_path, downloaded, client.using_unsigned, client.unsigned_fallback_used
+
+    cache_hits = 0
+    cache_downloads = 0
+    effective_unsigned = False
+    unsigned_fallback_used = False
+    worker_count = min(max(workers, 1), len(unique_uris))
+
+    with tqdm(
+        total=len(unique_uris),
+        desc="Caching source parquets",
+        unit="file",
+        dynamic_ncols=True,
+        mininterval=5.0,
+    ) as progress:
+        if worker_count == 1:
+            for uri in unique_uris:
+                try:
+                    _, _, downloaded, used_unsigned, used_fallback = cache_one(uri)
+                except Exception as exc:
+                    raise RuntimeError(f"Failed to cache source parquet {uri}: {exc}") from exc
+                if downloaded:
+                    cache_downloads += 1
+                else:
+                    cache_hits += 1
+                effective_unsigned = effective_unsigned or used_unsigned
+                unsigned_fallback_used = unsigned_fallback_used or used_fallback
+                progress.set_postfix({"cached": cache_hits, "downloaded": cache_downloads}, refresh=False)
+                progress.update()
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as pool:
+                futures = {pool.submit(cache_one, uri): uri for uri in unique_uris}
+                try:
+                    for future in as_completed(futures):
+                        uri = futures[future]
+                        try:
+                            _, _, downloaded, used_unsigned, used_fallback = future.result()
+                        except Exception as exc:
+                            for pending in futures:
+                                pending.cancel()
+                            raise RuntimeError(f"Failed to cache source parquet {uri}: {exc}") from exc
+                        if downloaded:
+                            cache_downloads += 1
+                        else:
+                            cache_hits += 1
+                        effective_unsigned = effective_unsigned or used_unsigned
+                        unsigned_fallback_used = unsigned_fallback_used or used_fallback
+                        progress.set_postfix({"cached": cache_hits, "downloaded": cache_downloads}, refresh=False)
+                        progress.update()
+                finally:
+                    for pending in futures:
+                        pending.cancel()
+
+    return {
+        "unique_uri_count": len(unique_uris),
+        "cache_hits": cache_hits,
+        "cache_downloads": cache_downloads,
+        "effective_unsigned": effective_unsigned,
+        "unsigned_fallback_used": unsigned_fallback_used,
+    }
 
 
 def normalize_source_path(value: Any) -> str:
@@ -533,6 +744,107 @@ def source_artifact_fields(source_artifact: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def is_transient_artifact_download_error(exc: BaseException) -> bool:
+    transient_types: list[type[BaseException]] = [TimeoutError]
+    try:
+        import requests
+
+        transient_types.extend([
+            requests.exceptions.SSLError,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.ContentDecodingError,
+        ])
+    except Exception:
+        pass
+    try:
+        import urllib3.exceptions
+
+        transient_types.extend([
+            urllib3.exceptions.SSLError,
+            urllib3.exceptions.ProtocolError,
+            urllib3.exceptions.ReadTimeoutError,
+            urllib3.exceptions.ConnectTimeoutError,
+            urllib3.exceptions.MaxRetryError,
+        ])
+    except Exception:
+        pass
+    try:
+        import wandb
+
+        comm_error = getattr(getattr(wandb, "errors", None), "CommError", None)
+        if comm_error is not None:
+            transient_types.append(comm_error)
+    except Exception:
+        pass
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, tuple(transient_types)):
+            return True
+        name = type(current).__name__.lower()
+        module = type(current).__module__.lower()
+        if (
+            "sslerror" in name
+            or "connectionerror" in name
+            or "timeouterror" in name
+            or ("wandb" in module and "comm" in name)
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def download_artifact_entry_with_retry(artifact: Any, entry_path: str, root: Path) -> Path:
+    for attempt in range(1, WANDB_METADATA_DOWNLOAD_ATTEMPTS + 1):
+        try:
+            return Path(artifact.get_entry(entry_path).download(root=str(root)))
+        except Exception as exc:
+            if attempt == WANDB_METADATA_DOWNLOAD_ATTEMPTS or not is_transient_artifact_download_error(exc):
+                raise
+            delay = WANDB_METADATA_DOWNLOAD_BASE_SECONDS * (2 ** (attempt - 1))
+            typer.echo(
+                f"Warning: W&B artifact metadata download failed for {entry_path} "
+                f"with {type(exc).__name__}: {exc}; retrying in {delay}s "
+                f"({attempt}/{WANDB_METADATA_DOWNLOAD_ATTEMPTS})",
+                err=True,
+            )
+            time.sleep(delay)
+    raise RuntimeError(f"unreachable: exhausted download attempts for {entry_path}")
+
+
+def source_manifest_identity(manifest: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        manifest.get("exported_at"),
+        manifest.get("encord_dataset_hash"),
+        manifest.get("episode_count"),
+        manifest.get("new_episode_count"),
+        manifest.get("preserved_episode_count"),
+    )
+
+
+def find_local_source_dataset_items(manifest: dict[str, Any]) -> Path | None:
+    target_identity = source_manifest_identity(manifest)
+    dataset_export_root = REPO_ROOT / "exports" / "encord-dataset-export"
+    for manifest_path in sorted(
+        dataset_export_root.glob("*/dataset/meta/source_dataset_manifest.json"),
+        reverse=True,
+    ):
+        try:
+            candidate_manifest = json.loads(manifest_path.read_text())
+        except Exception:
+            continue
+        if source_manifest_identity(candidate_manifest) != target_identity:
+            continue
+        items_path = manifest_path.with_name("source_dataset_items.json")
+        if items_path.exists():
+            return items_path
+    return None
+
+
 def load_source_artifact_metadata(
     *,
     wandb_config: dict[str, Any],
@@ -560,13 +872,31 @@ def load_source_artifact_metadata(
         typer.echo(f"Resolved source dataset artifact to {resolved_ref}.")
 
     artifact_dir = output_dir / "source_artifact_metadata"
-    manifest_file = Path(
-        artifact.get_entry("dataset/meta/source_dataset_manifest.json").download(root=str(artifact_dir))
+    manifest_file = download_artifact_entry_with_retry(
+        artifact,
+        "dataset/meta/source_dataset_manifest.json",
+        artifact_dir,
     )
-    items_file = Path(
-        artifact.get_entry("dataset/meta/source_dataset_items.json").download(root=str(artifact_dir))
-    )
-    return json.loads(manifest_file.read_text()), json.loads(items_file.read_text()), source_artifact
+    source_manifest = json.loads(manifest_file.read_text())
+    try:
+        items_file = download_artifact_entry_with_retry(
+            artifact,
+            "dataset/meta/source_dataset_items.json",
+            artifact_dir,
+        )
+    except Exception as exc:
+        if not is_transient_artifact_download_error(exc):
+            raise
+        local_items_file = find_local_source_dataset_items(source_manifest)
+        if local_items_file is None:
+            raise
+        typer.echo(
+            "Warning: W&B source_dataset_items.json download failed after retries; "
+            f"using matching local dataset-export metadata at {local_items_file}.",
+            err=True,
+        )
+        items_file = local_items_file
+    return source_manifest, json.loads(items_file.read_text()), source_artifact
 
 
 def source_episode_order(source_items: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], set[str]]:
@@ -1055,8 +1385,10 @@ def export_label_overlay(
     source_items: list[dict[str, Any]],
     source_manifest: dict[str, Any] | None,
     limit: int | None,
+    unsigned_s3: bool,
+    aws_profile: str | None,
+    s3_download_workers: int,
 ) -> dict[str, Any]:
-    client_s3 = s3_client(unsigned=False)
     source_by_key, ambiguous_source_keys = source_episode_order(source_items)
     selected_by_key: dict[str, tuple[int, dict[str, Any], dict[str, Any]]] = {}
     selected_signatures: dict[str, tuple[str, str]] = {}
@@ -1145,6 +1477,18 @@ def export_label_overlay(
         selected = selected[:limit]
     if not selected:
         raise typer.BadParameter("No caption label rows matched exportable episodes.")
+    if s3_download_workers < 1:
+        raise typer.BadParameter("--s3-download-workers must be at least 1.")
+
+    typer.echo(f"Using shared S3 object cache at {S3_CACHE_ROOT}")
+    prefetch_summary = prefetch_s3_cache(
+        [str(row["source_parquet_uri"]) for _, row, _ in selected],
+        unsigned_s3=unsigned_s3,
+        aws_profile=aws_profile,
+        workers=s3_download_workers,
+    )
+    client_s3 = S3ClientWithUnsignedFallback(unsigned=unsigned_s3, aws_profile=aws_profile)
+
     task_to_id: dict[str, int] = {}
     task_rows: list[dict[str, Any]] = []
     episode_rows: list[dict[str, Any]] = []
@@ -1157,72 +1501,77 @@ def export_label_overlay(
     parquet_cache_downloads = 0
     parquet_uri_resolution_counts: dict[str, int] = {}
 
-    typer.echo(f"Using shared S3 object cache at {S3_CACHE_ROOT}")
-    for index, (episode_index, row, source_episode) in enumerate(selected, start=1):
-        caption = str(row["language_instruction"])
-        task_id = task_to_id.setdefault(caption, len(task_to_id))
-        if len(task_rows) < len(task_to_id):
-            task_rows.append({"task_index": task_id, "task": caption})
+    with tqdm(
+        total=len(selected),
+        desc="Writing label episodes",
+        unit="episode",
+        dynamic_ncols=True,
+        mininterval=5.0,
+    ) as progress:
+        for episode_index, row, source_episode in selected:
+            caption = str(row["language_instruction"])
+            task_id = task_to_id.setdefault(caption, len(task_to_id))
+            if len(task_rows) < len(task_to_id):
+                task_rows.append({"task_index": task_id, "task": caption})
 
-        parquet_uri = str(row["source_parquet_uri"])
-        parquet_resolution = str(row.get("source_parquet_uri_resolution") or "unknown")
-        parquet_uri_resolution_counts[parquet_resolution] = parquet_uri_resolution_counts.get(parquet_resolution, 0) + 1
-        table, downloaded = download_parquet_table(client_s3, parquet_uri)
-        if downloaded:
-            parquet_cache_downloads += 1
-            cache_status = "downloaded"
-        else:
-            parquet_cache_hits += 1
-            cache_status = "cached"
-        typer.echo(f"[{index}/{len(selected)}] {cache_status} {parquet_uri}")
-        table = rewrite_label_table(
-            table,
-            episode_index=episode_index,
-            global_start=total_frames,
-            task_id=task_id,
-        )
-        if first_table is None:
-            first_table = table
-            info_uri = resolve_source_info_uri(row, source_episode)
-            first_source_info = read_s3_json(client_s3, info_uri) if info_uri else None
+            parquet_uri = str(row["source_parquet_uri"])
+            parquet_resolution = str(row.get("source_parquet_uri_resolution") or "unknown")
+            parquet_uri_resolution_counts[parquet_resolution] = parquet_uri_resolution_counts.get(parquet_resolution, 0) + 1
+            table, downloaded = download_parquet_table(client_s3, parquet_uri)
+            if downloaded:
+                parquet_cache_downloads += 1
+            else:
+                parquet_cache_hits += 1
+            table = rewrite_label_table(
+                table,
+                episode_index=episode_index,
+                global_start=total_frames,
+                task_id=task_id,
+            )
+            if first_table is None:
+                first_table = table
+                info_uri = resolve_source_info_uri(row, source_episode)
+                first_source_info = read_s3_json(client_s3, info_uri) if info_uri else None
 
-        output_path = (
-            output_dir
-            / "dataset"
-            / "data"
-            / f"chunk-{episode_index // CHUNK_SIZE:03d}"
-            / f"episode_{episode_index:06d}.parquet"
-        )
-        write_parquet(output_path, table)
-        parquet_paths.append(output_path)
-        length = table.num_rows
-        total_frames += length
+            output_path = (
+                output_dir
+                / "dataset"
+                / "data"
+                / f"chunk-{episode_index // CHUNK_SIZE:03d}"
+                / f"episode_{episode_index:06d}.parquet"
+            )
+            write_parquet(output_path, table)
+            parquet_paths.append(output_path)
+            length = table.num_rows
+            total_frames += length
 
-        episode_row = {
-            "episode_index": episode_index,
-            "tasks": [caption],
-            "length": length,
-            "encord_label_data_hash": row.get("data_hash"),
-            "encord_label_hash": row.get("label_hash"),
-            "encord_label_data_title": row.get("data_title"),
-            "encord_label_camera_name": row.get("camera_name"),
-            "episode_id": row.get("episode_id"),
-            "episode_path": row.get("episode_path"),
-            "source_parquet_uri": parquet_uri,
-            "source_parquet_uri_resolution": row.get("source_parquet_uri_resolution"),
-            "source_s3_uri": row.get("source_s3_uri"),
-            "source_s3_uri_resolution": row.get("source_s3_uri_resolution"),
-        }
-        episode_row.update({
-            "source_dataset_episode_index": source_episode.get("episode_index"),
-            "source_dataset_data_hash": source_episode.get("encord_data_hash"),
-            "source_dataset_data_group_uuid": source_episode.get("encord_data_group_uuid"),
-        })
-        episode_rows.append(episode_row)
-        manifest_rows.append({
-            **episode_row,
-            "artifact_path": output_path.relative_to(output_dir).as_posix(),
-        })
+            episode_row = {
+                "episode_index": episode_index,
+                "tasks": [caption],
+                "length": length,
+                "encord_label_data_hash": row.get("data_hash"),
+                "encord_label_hash": row.get("label_hash"),
+                "encord_label_data_title": row.get("data_title"),
+                "encord_label_camera_name": row.get("camera_name"),
+                "episode_id": row.get("episode_id"),
+                "episode_path": row.get("episode_path"),
+                "source_parquet_uri": parquet_uri,
+                "source_parquet_uri_resolution": row.get("source_parquet_uri_resolution"),
+                "source_s3_uri": row.get("source_s3_uri"),
+                "source_s3_uri_resolution": row.get("source_s3_uri_resolution"),
+            }
+            episode_row.update({
+                "source_dataset_episode_index": source_episode.get("episode_index"),
+                "source_dataset_data_hash": source_episode.get("encord_data_hash"),
+                "source_dataset_data_group_uuid": source_episode.get("encord_data_group_uuid"),
+            })
+            episode_rows.append(episode_row)
+            manifest_rows.append({
+                **episode_row,
+                "artifact_path": output_path.relative_to(output_dir).as_posix(),
+            })
+            progress.set_postfix({"episodes": len(episode_rows), "frames": total_frames}, refresh=False)
+            progress.update()
 
     assert first_table is not None
     dataset_meta = output_dir / "dataset" / "meta"
@@ -1273,6 +1622,14 @@ def export_label_overlay(
         "ambiguous_label_episode_path_count": len(ambiguous_label_keys),
         "skipped_label_count": len(skipped),
         "s3_cache_root": str(S3_CACHE_ROOT),
+        "unsigned_s3": unsigned_s3,
+        "aws_profile": aws_profile,
+        "s3_download_worker_count": s3_download_workers,
+        "source_parquet_unique_uri_count": prefetch_summary["unique_uri_count"],
+        "s3_effective_unsigned": client_s3.using_unsigned or prefetch_summary["effective_unsigned"],
+        "s3_unsigned_fallback_used": client_s3.unsigned_fallback_used or prefetch_summary["unsigned_fallback_used"],
+        "parquet_cache_prefetch_hit_count": prefetch_summary["cache_hits"],
+        "parquet_cache_prefetch_download_count": prefetch_summary["cache_downloads"],
         "parquet_cache_hit_count": parquet_cache_hits,
         "parquet_cache_download_count": parquet_cache_downloads,
         "episodes": sorted(manifest_rows, key=lambda item: item["episode_index"]),
@@ -1382,6 +1739,12 @@ def main(
     metadata_yaml: Annotated[Path, typer.Option(help="Required YAML notes for this dataset/label version.")] = DEFAULT_YAML_CONFIG,
     wandb_config: Annotated[Path, typer.Option(help="W&B config YAML.")] = DEFAULT_WANDB_CONFIG,
     limit: Annotated[int | None, typer.Option(help="Optional max number of caption episodes to export.")] = None,
+    unsigned_s3: Annotated[bool, typer.Option(help="Use unsigned S3 requests for public source buckets.")] = False,
+    aws_profile: Annotated[str | None, typer.Option(help="AWS profile for signed source S3 reads, e.g. encord-robotics.")] = None,
+    s3_download_workers: Annotated[
+        int,
+        typer.Option(min=1, help="Parallel workers for prefetching source parquets into the shared S3 cache."),
+    ] = 8,
 ) -> None:
     typer.echo("Loading config...")
     metadata = load_yaml(metadata_yaml, "metadata YAML")
@@ -1430,6 +1793,9 @@ def main(
         source_items=source_items,
         source_manifest=source_manifest,
         limit=limit,
+        unsigned_s3=unsigned_s3,
+        aws_profile=aws_profile,
+        s3_download_workers=s3_download_workers,
     )
     resolved_preview_rows = label_summary.pop("_resolved_preview_rows", rows)
     label_summary.update({

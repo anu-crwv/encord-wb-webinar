@@ -40,13 +40,18 @@ scripts/encord/wandb_config.yaml
 ## Export Label Overlay To W&B
 
 ```bash
-uv run --script scripts/encord/label-export/export_single_view_labels_to_wandb.py \
+uv run --script scripts/encord/label-export/export_labels_to_wandb.py \
   --metadata-yaml scripts/encord/label-export/label_export_config.yaml \
   --source-artifact-ref encord-source-data:v0 \
+  --aws-profile encord-robotics \
+  --s3-download-workers 8 \
   --limit 3
 ```
 
 For a full export, omit `--limit`.
+
+Run `aws sso login --profile encord-robotics` before exporting private source S3 data. If the
+source bucket is public, you can add `--unsigned-s3` to force unsigned reads from the start.
 
 Writes local files to:
 

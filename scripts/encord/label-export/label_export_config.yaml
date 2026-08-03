@@ -1,13 +1,12 @@
-encord_project_hash: f09ef7ae-2590-4ece-919a-bff7aa58789e
+encord_project_hash: 23f30792-4d41-4d02-8c39-128dbfe3262f
 source_s3_prefix: s3://ego-data-collection-encord/raw-feed/trossen-data/
-source_dataset_note: "531 episodes dataset without SRS"
-label_version_note: "Use task name metadata to generate 3 different language instructions"
-captioning_method: captioning v1 metadata-based task name + semantic diversification
-qc_status: none
-curation_status: uncurated
+source_dataset_note: "1.3k episodes dataset - SRS"
+label_version_note: "VLM-based captioning with light QC"
+captioning_method: captioning v2 VLM-generated captions
+qc_status: partial
+curation_status: partly curated
 tags:
   - latest
-  - source-data-v4
+  - source-data-v5
   - production-ready
-  - multi-caption
 # source_artifact_ref: encord-source-data:v0
